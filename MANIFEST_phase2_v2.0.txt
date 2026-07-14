@@ -1,0 +1,56 @@
+MANIFEST — phase2_v2.0.zip 最終版檔案清單（時間戳為打包容器時間 UTC）
+ZIP SHA256: 0be60e5fce13741b9549e100f8fe31a028a4acf7283c2d08dba2fecbd74ae1f9
+檔案總數: 50
+
+修改時間                  大小  SHA256前12     路徑
+-----------------------------------------------------------------------------------------------
+2026-07-12 12:46    9562  dc99e77e5b7b  phase1/FORMULAS.md
+2026-07-12 08:09    4026  1b86858d975b  phase1/LESSONLEARNT.md
+2026-07-12 12:46    6869  696d846a1652  phase1/README.md
+2026-07-12 07:55    3483  0ec8954a4ad8  phase1/auto_update.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/config/__init__.py
+2026-07-12 08:10    3932  aefdb4a362a8  phase1/config/config.py
+2026-07-12 08:18    1722  c4beb5bf09f0  phase1/config/phase2_config.py
+2026-07-11 09:07    1725  8653c9ea7dfd  phase1/conftest.py
+2026-07-12 07:55    3213  b95cff1bc5a0  phase1/diagnose_duplicates.py
+2026-07-12 12:46     180  39fe8d5f193e  phase1/requirements.txt
+2026-07-12 07:55    4495  06f667e02827  phase1/run_phase1.py
+2026-07-12 08:22   10815  e0e5cd9a2139  phase1/run_phase2.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/src/__init__.py
+2026-07-12 08:18       0  e3b0c44298fc  phase1/src/features/__init__.py
+2026-07-12 08:19    4760  01f39b948301  phase1/src/features/feature_matrix.py
+2026-07-12 08:18    1286  2b6a990a15f6  phase1/src/features/tech_indicators.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/src/fetch/__init__.py
+2026-07-11 10:08   11398  60b20c10e6b3  phase1/src/fetch/auto_fetcher.py
+2026-07-11 09:04    4439  db6fde2d53cc  phase1/src/fetch/holdings.py
+2026-07-12 08:00    8409  23d24f5e9e6b  phase1/src/fetch/twse_daily.py
+2026-07-12 08:18       0  e3b0c44298fc  phase1/src/model/__init__.py
+2026-07-12 08:20    2313  9eba3d831d65  phase1/src/model/metrics.py
+2026-07-12 08:21    3227  10041455defa  phase1/src/model/sensitivity.py
+2026-07-12 08:21    1707  0b34500764e3  phase1/src/model/serialize.py
+2026-07-12 08:20    2429  7a8b6e2d4579  phase1/src/model/train.py
+2026-07-12 08:23    3712  0138022e1d56  phase1/src/model/walk_forward.py
+2026-07-11 09:01    2838  f480193e6e6d  phase1/src/schemas.py
+2026-07-11 09:07    3484  61d2c03585bf  phase1/src/signal_events.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/src/validate/__init__.py
+2026-07-12 08:00    6104  9f0c438b82f6  phase1/src/validate/trading_calendar.py
+2026-07-11 09:04    5283  537e8668cfd8  phase1/src/validate/vg1.py
+2026-07-12 08:20    3094  b28db607987e  phase1/src/validate/vg2_survivorship.py
+2026-07-12 08:20    3319  6a13669b477f  phase1/src/validate/vg3_significance.py
+2026-07-12 08:20    1684  59f962f0cdce  phase1/src/validate/vg4_sample.py
+2026-07-12 08:18    2711  7c6583854155  phase1/src/validate/vg5_asserts.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/src/volume/__init__.py
+2026-07-11 09:06    3453  cfad131e48a2  phase1/src/volume/volume_features.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/src/wave/__init__.py
+2026-07-11 09:06   10837  62bc8d68ebe1  phase1/src/wave/wave_labels.py
+2026-07-11 09:05    4606  f87eae32d48c  phase1/src/wave/zigzag.py
+2026-07-11 09:00       0  e3b0c44298fc  phase1/tests/__init__.py
+2026-07-11 10:08    4504  8eafd337a83e  phase1/tests/test_auto_fetcher.py
+2026-07-12 08:00    6761  d7061f6c872e  phase1/tests/test_fetch_parsing.py
+2026-07-11 09:08     827  a084e6e224b0  phase1/tests/test_label_reproducibility.py
+2026-07-11 09:08    2265  8ab56a94fecb  phase1/tests/test_no_lookahead.py
+2026-07-12 08:23    6551  2ecccb7f071c  phase1/tests/test_phase2_core.py
+2026-07-11 09:09    2434  3fea1540c757  phase1/tests/test_signal_events.py
+2026-07-12 07:54    4717  450711133772  phase1/tests/test_vg1.py
+2026-07-11 09:08    1591  f2a11593144b  phase1/tests/test_volume_features.py
+2026-07-11 09:09    1679  6e628f9d0157  phase1/tests/test_wave_rules.py

@@ -1,0 +1,21 @@
+{
+  "disclaimer": "【風險聲明】本系統僅供研究與教育用途，歷史回測績效不代表未來表現，不構成投資建議。波浪理論屬主觀分析框架，本系統採規則化近似（approximation），非唯一標準。",
+  "stock_id": "2454",
+  "period_start": "2016-07-14",
+  "period_end": "2026-07-09",
+  "n_rows": 2412,
+  "dtype_ok": true,
+  "n_duplicate_dates": 0,
+  "n_negative_values": 0,
+  "theoretical_trading_days": 2435,
+  "actual_trading_days": 2412,
+  "completeness_rate": 0.990554,
+  "missing_ranges": [
+    [
+      "2023-03-01",
+      "2023-03-31"
+    ]
+  ],
+  "passed": true,
+  "warnings": []
+}

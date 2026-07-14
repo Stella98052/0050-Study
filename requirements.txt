@@ -1,0 +1,8 @@
+# 0050 量化分析系統（第一+第二階段）— 測試環境版本
+pandas==3.0.2
+numpy==2.4.4
+requests==2.33.1
+pytest==9.1.1
+lightgbm==4.6.0
+joblib==1.5.3
+matplotlib==3.10.8
