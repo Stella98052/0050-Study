@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-PHASE2_VERSION: str = "2.15"
+PHASE2_VERSION: str = "2.16"
 
 
 @dataclass(frozen=True)

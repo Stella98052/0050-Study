@@ -25,6 +25,26 @@ from src.schemas import OHLCV_SCHEMA, FetchError
 _COL_DATE, _COL_VOLUME, _COL_OPEN, _COL_HIGH, _COL_LOW, _COL_CLOSE = 0, 1, 3, 4, 5, 6
 
 
+
+def _atomic_to_csv(df, path) -> None:
+    """v2.16 原子寫入（外部審查唯一採納項）：先寫同目錄暫存檔再
+    os.replace 原子替換——中斷/當機不再留下半寫的髒快取
+    （TWSE 錯月快取事件的同族風險）。"""
+    import os
+    import tempfile
+    d = os.path.dirname(str(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    os.close(fd)
+    try:
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
 def _roc_date_to_ad(roc: str) -> date:
     """民國年日期字串（例 '113/09/02'）轉西元 date。"""
     y, m, d = roc.strip().split("/")
@@ -145,7 +165,7 @@ def fetch_stock_month(
             resp.raise_for_status()
             df = parse_stock_day_json(resp.json(), stock_id)
             cpath.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(cpath, index=False)          # 空表亦快取，避免重複請求
+            _atomic_to_csv(df, cpath)             # 空表亦快取；原子寫入防髒檔
             return _keep_requested_month(df, stock_id, yyyymm)
         except Exception as exc:                    # noqa: BLE001（記錄後重試）
             last_err = repr(exc)

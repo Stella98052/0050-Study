@@ -662,3 +662,142 @@ def test_final_search_verdict_converges_with_vg7(cfg):
         ["good_feat"], [],
         [_rpt("good_feat", "均值含資訊 → 進 walk-forward 折內回歸+IC 評估")])
     assert any("VG-7 存活特徵" in ln for ln in lines2)
+
+
+def test_atomic_csv_write_no_partial_file(cfg, tmp_path):
+    """v2.16 鎖定：原子寫入成功後檔案完整；寫入失敗不留下暫存/半寫檔。"""
+    from src.fetch.twse_daily import _atomic_to_csv
+    df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    p = tmp_path / "cache.csv"
+    _atomic_to_csv(df, p)
+    assert pd.read_csv(p).shape == (2, 2)
+    assert list(tmp_path.glob("*.tmp")) == []           # 無殘留暫存
+
+    class _Boom:
+        def to_csv(self, *a, **k): raise IOError("disk full")
+    import pytest as _pt
+    with _pt.raises(IOError):
+        _atomic_to_csv(_Boom(), tmp_path / "x.csv")
+    assert not (tmp_path / "x.csv").exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ===== 第三階段（面板/每日更新/前瞻紀錄）鎖定測試 =====
+
+def test_vg_status_missing_report_no_silent_green(cfg, tmp_path):
+    """VG 狀態卡鐵則：無 phase2 報告時，一律標未知(None)+警語，
+    絕不默默顯示全綠（規格：未通過不可省略，缺報告更不可假裝通過）。"""
+    from src.dashboard.vg_status import load_vg_status, vg6_blocking
+    cards = load_vg_status(tmp_path / "none.json")
+    assert all(c["passed"] is None for c in cards)
+    assert all("尚未執行" in c["note"] for c in cards)
+    blocked, msg = vg6_blocking(tmp_path / "none.json")
+    assert blocked and "演示" in msg
+
+
+def test_vg_status_reflects_failure(cfg, tmp_path):
+    """VG-6 未通過必須如實傳遞為蓋過警語（不得美化）。"""
+    import json
+    from src.dashboard.vg_status import load_vg_status, vg6_blocking
+    rp = tmp_path / "phase2_report.json"
+    rp.write_text(json.dumps({"vg_summary": {
+        "VG-1": True, "VG-2": True, "VG-3": False,
+        "VG-4": True, "VG-5": True, "VG-6": False}}), encoding="utf-8")
+    cards = {c["gate"]: c["passed"] for c in load_vg_status(rp)}
+    assert cards["VG-3"] is False and cards["VG-6"] is False
+    blocked, msg = vg6_blocking(rp)
+    assert blocked and "無判別力" in msg
+
+
+def test_predictions_log_dedup_and_progress(cfg, tmp_path):
+    """前瞻紀錄：同 (stock,last_bar_date) 去重（不可重複計）；
+    獨立樣本數用 select_independent_dates（間隔≥N）計。"""
+    from src.dashboard.predictions_log import (append_prediction,
+                                               prospective_progress)
+    p = tmp_path / "predictions.csv"
+
+    def _row(sid, d):
+        return {"run_ts": "t", "stock_id": sid, "last_bar_date": d,
+                "close": 100.0, "proba_up": 0.5, "pick": True,
+                "forward_days": 5, "model_tag": "m"}
+
+    assert append_prediction(_row("2330", "2026-01-05"), p) is True
+    assert append_prediction(_row("2330", "2026-01-05"), p) is False  # 去重
+    append_prediction(_row("2330", "2026-01-06"), p)      # 間隔1日 → 不獨立
+    append_prediction(_row("2330", "2026-01-15"), p)      # 間隔≥5 → 獨立
+    prog = prospective_progress(p, 5)
+    assert prog["n_rows"] == 3 and prog["n_independent"] == 2
+
+
+def test_charts_are_pure_functions(cfg, ohlcv):
+    """圖表純函式：回傳 plotly Figure，無 streamlit 依賴（可測）。"""
+    import plotly.graph_objects as go
+    from src.dashboard.charts import make_candles_figure, make_mv_figure
+    from src.volume.volume_features import compute_mv_features
+    from src.wave.zigzag import (compute_pivots_realtime,
+                                 compute_pivots_retrospective)
+    piv_r = compute_pivots_retrospective(ohlcv, cfg)
+    piv_rt = compute_pivots_realtime(ohlcv, date.today(), cfg)
+    mv = compute_mv_features(ohlcv, cfg)
+    tail = ohlcv.tail(60).reset_index(drop=True)
+    t0 = pd.to_datetime(tail["date"].iloc[0])
+    assert isinstance(make_candles_figure(tail, piv_r, piv_rt, t0), go.Figure)
+    assert isinstance(make_mv_figure(tail, mv, t0, cfg), go.Figure)
+
+
+def test_stock_names_from_holdings_and_format(cfg, tmp_path):
+    """名稱對照鎖定：讀 holdings.csv name 欄；缺名稱只回代號（不捏造）；
+    無 name 欄不報錯回空。"""
+    from src.dashboard.stock_names import (format_choice,
+                                           load_names_from_holdings)
+    p = tmp_path / "holdings.csv"
+    p.write_text("stock_id,name,source_note\n2330,台積電,元大官網\n"
+                 "2454,,元大官網\n", encoding="utf-8")   # 2454 name 空白
+    names = load_names_from_holdings(p)
+    assert names == {"2330": "台積電"}                    # 空白 name 不納入
+    assert format_choice("2330", names) == "2330 台積電"
+    assert format_choice("2454", names) == "2454"         # 無名稱→只代號
+    # 無 name 欄的 CSV 不報錯
+    p2 = tmp_path / "no_name.csv"
+    p2.write_text("stock_id\n2330\n", encoding="utf-8")
+    assert load_names_from_holdings(p2) == {}
+    assert load_names_from_holdings(tmp_path / "none.csv") == {}
+
+
+def test_model_service_accepts_raw_feature_matrix(cfg, ohlcv, tmp_path):
+    """面板預測 bug 鎖定：build_feature_matrix 的原始輸出（含字串欄
+    wave_label_realtime、未 one-hot）必須能直接餵 predict_latest——
+    先前對齊檢查誤比對展開後 wave_1… 導致每檔股票都報缺欄失敗。"""
+    from datetime import datetime
+    from pathlib import Path
+    from src.features.feature_matrix import build_feature_matrix
+    from src.model.train import train_model
+    from src.model.serialize import ModelBundle, save_bundle
+    from src.dashboard.model_service import load_model_pack, predict_latest
+
+    p2 = Phase2Config()
+    feats = build_feature_matrix(ohlcv, cfg, p2).dropna(subset=["label_up"])
+    if len(feats) < 50:
+        import pytest as _pt
+        _pt.skip("合成資料過短")
+    model, names = train_model(feats, p2)
+    assert "wave_1" in names                              # 模型記展開後名
+    panel_feats = build_feature_matrix(ohlcv, cfg, p2)
+    assert "wave_label_realtime" in panel_feats.columns   # 面板送原始欄
+    assert "wave_1" not in panel_feats.columns
+
+    object.__setattr__(p2, "model_dir", tmp_path / "m")
+    bundle = ModelBundle(feature_names=tuple(names), zigzag_threshold_used=0.05,
+                         trained_at=datetime.now().isoformat(),
+                         version_tag="t", vg_summary={"VG-6": False},
+                         p2_config={})
+    path = save_bundle(model, bundle, p2)
+    m, b = load_model_pack(path)
+    pred = predict_latest(m, b, panel_feats)
+    assert pred is not None and 0.0 <= pred["proba_up"] <= 1.0  # 成功出機率
+
+    # 真缺原始欄時仍須明確報錯（不靜默）
+    import pytest as _pt
+    bad = panel_feats.drop(columns=["mv_short"])
+    with _pt.raises(ValueError, match="缺少原始欄位"):
+        predict_latest(m, b, bad)
