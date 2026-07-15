@@ -3,6 +3,9 @@ name: 單元測試
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "data/**"
+      - "**/*.pyc"
   pull_request:
     branches: [main]
   workflow_dispatch: {}
@@ -14,10 +17,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: 安裝相依
+          python-version: "3.13"
+          cache: pip
+      - name: 安裝系統套件（LightGBM 執行期需 libgomp1）
+        run: sudo apt-get update && sudo apt-get install -y libgomp1
+      - name: 安裝 Python 相依
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 執行 pytest（治理鐵則：全綠才可部署）
+      - name: 執行 pytest
         run: python -m pytest tests/ -q

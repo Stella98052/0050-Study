@@ -22,7 +22,9 @@ from config.phase3_config import Phase3Config, PHASE3_VERSION
 from src.dashboard.charts import make_candles_figure, make_mv_figure
 from src.dashboard.data_service import load_stock_view
 from src.dashboard.model_service import load_model_pack, predict_latest
-from src.dashboard.predictions_log import prospective_progress
+from src.dashboard.predictions_log import (prospective_progress,
+                                           load_predictions_view,
+                                           latest_prediction_per_stock)
 from src.dashboard.stock_names import format_choice, load_names_from_holdings
 from src.dashboard.vg_status import load_vg_status, vg6_blocking
 from bootstrap_cloud import cloud_readiness, READINESS_GUIDE
@@ -172,5 +174,39 @@ if sid:
     st.progress(min(1.0, prog["n_independent"] / P3.min_prospective_samples),
                 text=f"獨立樣本 {prog['n_independent']} / "
                      f"{P3.min_prospective_samples}（紀錄 {prog['n_rows']} 列）")
-    st.caption("每日收盤後執行 python daily_update.py --holdings holdings.csv "
-               "累積；達標前不得對 Model v2 下結論（預先宣告規則）。")
+    st.caption("每日收盤後由 GitHub Actions 自動執行 daily_update.py 累積；"
+               "達標前不得對 Model v2 下結論（預先宣告規則）。")
+
+    # ── 每日前瞻紀錄（自動讀取 Actions 累積的 predictions.csv）──
+    st.subheader("每日前瞻紀錄（自動更新）")
+    latest = latest_prediction_per_stock(P3.predictions_csv)
+    if len(latest) == 0:
+        st.info("尚無前瞻紀錄。GitHub Actions「每日前瞻更新」每交易日 22:00 "
+                "自動累積；也可在 repo 的 Actions 分頁手動 Run workflow 立即產生。")
+    else:
+        st.markdown("**各股最新預測**（每日自動更新，非即時報價）")
+        show = latest[["stock_id", "last_bar_date", "close",
+                       "proba_up", "pick"]].copy()
+        show["last_bar_date"] = show["last_bar_date"].dt.strftime("%Y-%m-%d")
+        show["proba_up"] = (show["proba_up"] * 100).round(1).astype(str) + "%"
+        show["pick"] = show["pick"].map({True: "看多", False: "觀望"})
+        show.columns = ["代碼", "資料日", "收盤", "P(漲)", "方向"]
+        st.dataframe(show, use_container_width=True, hide_index=True)
+        # 選定股票的預測歷史趨勢
+        hist = load_predictions_view(P3.predictions_csv, sid)
+        if len(hist) >= 2:
+            import plotly.graph_objects as _go
+            fig = _go.Figure(_go.Scatter(
+                x=hist["last_bar_date"], y=hist["proba_up"],
+                mode="lines+markers", name="P(漲)",
+                line=dict(color="#1f77b4")))
+            fig.add_hline(y=0.5, line_dash="dot", line_color="#999")
+            fig.update_layout(height=240, margin=dict(l=10, r=10, t=28, b=10),
+                              yaxis_title="P(未來5日淨報酬>0)",
+                              title=f"{_label(sid)} 前瞻預測歷史")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("此圖為模型每日輸出的機率軌跡；VG-6 現況下模型無判別力，"
+                       "僅供前瞻管線演示，達 30 獨立樣本後才做最終裁決。")
+        elif sid:
+            st.caption(f"{format_choice(sid, names)} 目前僅 {len(hist)} 筆紀錄，"
+                       "累積 2 筆以上才顯示趨勢圖。")

@@ -1,55 +1,48 @@
 name: 每日前瞻更新（收盤後）
 
-# 台北時間每交易日 22:00（= UTC 14:00）執行，確保 TWSE 盤後資料齊備
 on:
   schedule:
-    - cron: "0 14 * * 1-5"      # 週一至週五 UTC 14:00
-  workflow_dispatch: {}          # 允許手動觸發
+    - cron: "0 14 * * 1-5"      # 台北 22:00 = UTC 14:00，週一至週五
+  workflow_dispatch: {}
 
 permissions:
-  contents: write                # 允許 commit predictions.csv 回 repo
+  contents: write
 
 concurrency:
-  group: daily-update            # 避免手動+排程同時跑造成 push 衝突
+  group: daily-update
   cancel-in-progress: false
 
 jobs:
   daily-update:
     runs-on: ubuntu-latest
-    timeout-minutes: 40          # TWSE 抓取有禮貌延遲，給足時間
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
-
+      - name: 安裝系統套件（LightGBM 執行期需 libgomp1）
+        run: sudo apt-get update && sudo apt-get install -y libgomp1
       - name: 安裝相依
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: 若無模型包則先建置（首次自動化用）
+      - name: 若無模型包則先建置
         run: |
           if [ ! -f data/models/model_phase2-v1.joblib ]; then
-            echo "模型包不存在，執行 run_phase2 建置（含 VG 驗證）…"
-            python run_phase2.py --holdings holdings.csv --skip-vg2 || \
-              echo "建置非零退出，續行"
-          else
-            echo "模型包已存在，略過建置"
+            python run_phase2.py --holdings holdings.csv --skip-vg2 || echo "建置非零退出，續行"
           fi
-
-      - name: 執行每日更新（VG-1 + 前瞻預測紀錄）
-        run: |
-          python daily_update.py --holdings holdings.csv || \
-            echo "更新非零退出，續行 commit 現有進度"
-
-      - name: Commit 前瞻紀錄、模型包與資料快取
+      - name: 執行每日更新
+        run: python daily_update.py --holdings holdings.csv || echo "更新非零退出，續行 commit"
+      - name: Commit 前瞻紀錄與模型/快取（排除暫存）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f data/predictions.csv data/raw data/models data/reports 2>/dev/null || true
+          # 只 add 需要的產物，絕不 add __pycache__/pyc（避免污染 repo）
+          git add -f data/predictions.csv data/models data/reports 2>/dev/null || true
+          git add -f data/raw 2>/dev/null || true
+          git reset -q -- '**/__pycache__' '**/*.pyc' 2>/dev/null || true
           if git diff --staged --quiet; then
             echo "無變更，略過 commit"
           else
