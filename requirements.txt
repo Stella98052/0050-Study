@@ -1,10 +1,14 @@
-# 0050 量化分析系統（第一+第二階段）— 測試環境版本
-pandas==3.0.2
-numpy==2.4.4
-requests==2.33.1
-pytest==9.1.1
-lightgbm==4.6.0
-joblib==1.5.3
-matplotlib==3.10.8
-streamlit==1.59.2
-plotly==6.9.0
+# 0050 量化分析系統 — 相依套件
+# 版本策略：用下限（>=）而非精確釘死，讓不同 Python 版本（本機 3.14 /
+# CI 3.13）都能解析到相容版本；本機實測版本記於註解供參。
+pandas>=2.2            # 本機實測 3.0.2
+numpy>=1.26            # 本機實測 2.4.4
+requests>=2.31         # 本機實測 2.33.1
+pytest>=8.0            # 本機實測 9.1.1
+lightgbm>=4.3          # 本機實測 4.6.0
+scikit-learn>=1.3      # 本機實測 1.8.0（LightGBM sklearn 介面 LGBMClassifier 必需）
+joblib>=1.3            # 本機實測 1.5.3
+matplotlib>=3.8        # 本機實測 3.10.8
+streamlit>=1.40        # 本機實測 1.59.2
+plotly>=5.20           # 本機實測 6.9.0
+scipy>=1.13            # 本機實測 1.18.0

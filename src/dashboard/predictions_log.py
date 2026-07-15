@@ -41,3 +41,30 @@ def prospective_progress(path: Path, n_days: int) -> dict:
         dts = sorted(pd.to_datetime(g["last_bar_date"]))
         n_ind += len(select_independent_dates(dts, n_days))
     return {"n_rows": int(len(df)), "n_independent": int(n_ind)}
+
+
+def load_predictions_view(path, stock_id: str | None = None):
+    """讀取前瞻紀錄供面板呈現：全部或單股。回傳 DataFrame（空檔回空表）。
+
+    此資料由 GitHub Actions「每日前瞻更新」每交易日自動累積並 commit，
+    面板部署後每次重新載入即讀到最新（Streamlit Cloud 隨 repo push 更新）。"""
+    import pandas as pd
+    if not path.exists():
+        return pd.DataFrame(columns=COLS)
+    df = pd.read_csv(path, dtype={"stock_id": str})
+    df["last_bar_date"] = pd.to_datetime(df["last_bar_date"])
+    df = df.sort_values("last_bar_date")
+    if stock_id:
+        df = df[df["stock_id"] == str(stock_id)]
+    return df.reset_index(drop=True)
+
+
+def latest_prediction_per_stock(path):
+    """各股最近一筆預測（面板總覽表用）。"""
+    import pandas as pd
+    df = load_predictions_view(path)
+    if len(df) == 0:
+        return pd.DataFrame(columns=COLS)
+    return (df.sort_values("last_bar_date")
+              .groupby("stock_id", as_index=False).tail(1)
+              .sort_values("stock_id").reset_index(drop=True))
