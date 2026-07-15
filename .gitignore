@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# 本機暫存（但部署需保留 data/models 與 data/raw，見 DEPLOY.md 用 git add -f）
+data/models/*.joblib
+data/raw/
+data/reports/
+data/predictions.csv
+logs/
+*.tmp
+
+# 環境
+.venv/
+.env

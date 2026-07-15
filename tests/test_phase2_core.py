@@ -801,3 +801,15 @@ def test_model_service_accepts_raw_feature_matrix(cfg, ohlcv, tmp_path):
     bad = panel_feats.drop(columns=["mv_short"])
     with _pt.raises(ValueError, match="缺少原始欄位"):
         predict_latest(m, b, bad)
+
+
+def test_cloud_readiness_no_silent_ready(cfg, tmp_path):
+    """雲端就緒鐵則：模型缺失時 ready=False（不假裝就緒）；
+    齊備時才 ready=True。"""
+    from bootstrap_cloud import cloud_readiness
+    r1 = cloud_readiness(tmp_path / "none.joblib", tmp_path / "none.csv")
+    assert r1["ready"] is False and r1["has_model"] is False
+    mp = tmp_path / "m.joblib"; mp.write_bytes(b"x")
+    hp = tmp_path / "holdings.csv"; hp.write_text("stock_id\n2330\n")
+    r2 = cloud_readiness(mp, hp)
+    assert r2["ready"] is True

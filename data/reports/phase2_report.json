@@ -1,7 +1,7 @@
 {
   "disclaimer": "【風險聲明】本系統僅供研究與教育用途，歷史回測績效不代表未來表現，不構成投資建議。波浪理論屬主觀分析框架，本系統採規則化近似（approximation），非唯一標準。",
   "phase2_version": "2.16",
-  "holdout_start": "2025-07-13",
+  "holdout_start": "2025-07-15",
   "walk_forward_folds": [
     {
       "fold": 0,
@@ -327,26 +327,26 @@
     }
   ],
   "holdout_metrics": {
-    "n_trades": 1022,
-    "n_independent": 50,
-    "avg_trade_net": 0.014912,
-    "sharpe_gross": 2.2308,
-    "sharpe_net": 1.5201,
-    "mdd_net": 0.1876,
-    "win_rate_net": 0.5333,
-    "payoff_ratio_net": 1.5229,
-    "alpha_net_vs_benchmark": -0.432,
-    "total_return_gross": 1.292,
-    "total_return_net": 0.7168
+    "n_trades": 969,
+    "n_independent": 51,
+    "avg_trade_net": 0.01607,
+    "sharpe_gross": 2.7841,
+    "sharpe_net": 2.1102,
+    "mdd_net": 0.1428,
+    "win_rate_net": 0.5335,
+    "payoff_ratio_net": 1.5937,
+    "alpha_net_vs_benchmark": 0.1806,
+    "total_return_gross": 2.0924,
+    "total_return_net": 1.3066
   },
   "vg3_permutation": {
     "method": "permutation",
     "n_iterations": 500,
-    "p_value": 0.206,
+    "p_value": 0.234,
     "ci_low": null,
     "ci_high": null,
     "metric_name": "mean_return",
-    "plain_language": "真實訊號平均報酬 0.0193%，落在 500 次隨機抽樣分布的第 79.4 百分位（p=0.2060）。→ 無法證明此訊號優於隨機（p 未達顯著水準）。",
+    "plain_language": "真實訊號平均報酬 0.0193%，落在 500 次隨機抽樣分布的第 76.6 百分位（p=0.2340）。→ 無法證明此訊號優於隨機（p 未達顯著水準）。",
     "passed": false
   },
   "vg3_bootstrap": {
@@ -362,29 +362,29 @@
   "vg4": {
     "n_events": 210,
     "n_independent": 181,
-    "oos_period_days": 364,
+    "oos_period_days": 365,
     "oos_n_independent": 20,
     "threshold": 30,
     "reliable": true,
-    "statement": "獨立訊號數 181（事件數 210），門檻 30。達標。 樣本外期間 364 天、獨立訊號 20 個。"
+    "statement": "獨立訊號數 181（事件數 210），門檻 30。達標。 樣本外期間 365 天、獨立訊號 20 個。"
   },
   "vg2": "未執行/失敗（未通過）",
   "vg6": {
-    "n": 2340,
-    "proba_min": 0.1304,
-    "proba_p25": 0.4116,
-    "proba_p50": 0.4822,
-    "proba_p75": 0.5555,
-    "proba_max": 0.9362,
-    "proba_std": 0.1338,
-    "pick_rate_row": 0.4368,
-    "share_mid_band": 0.3564,
-    "auc": 0.4996,
+    "n": 2350,
+    "proba_min": 0.0981,
+    "proba_p25": 0.3995,
+    "proba_p50": 0.4752,
+    "proba_p75": 0.5513,
+    "proba_max": 0.9408,
+    "proba_std": 0.1404,
+    "pick_rate_row": 0.4123,
+    "share_mid_band": 0.3426,
+    "auc": 0.4986,
     "flags": [
       "auc_no_skill"
     ],
     "passed": false,
-    "statement": "機率分布 min=0.130 P25=0.412 中位=0.482 P75=0.555 max=0.936 std=0.134｜逐列選中率=43.7%｜中間帶占比=35.6%｜AUC=0.500。未通過：['auc_no_skill']——模型輸出退化，holdout 績效不可歸因於模型判斷，需重新設計特徵/訓練。（註：多股池聚合占比100%為數學必然，本關卡以逐列分布為準）"
+    "statement": "機率分布 min=0.098 P25=0.399 中位=0.475 P75=0.551 max=0.941 std=0.140｜逐列選中率=41.2%｜中間帶占比=34.3%｜AUC=0.499。未通過：['auc_no_skill']——模型輸出退化，holdout 績效不可歸因於模型判斷，需重新設計特徵/訓練。（註：多股池聚合占比100%為數學必然，本關卡以逐列分布為準）"
   },
   "vg_summary": {
     "VG-1": true,

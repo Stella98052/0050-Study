@@ -1,0 +1,2 @@
+# Streamlit Cloud 系統套件（LightGBM 執行期需 libgomp）
+libgomp1

@@ -1,0 +1,12 @@
+# Streamlit Community Cloud 設定
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#1f77b4"
+base = "light"

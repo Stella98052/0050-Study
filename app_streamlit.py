@@ -25,6 +25,7 @@ from src.dashboard.model_service import load_model_pack, predict_latest
 from src.dashboard.predictions_log import prospective_progress
 from src.dashboard.stock_names import format_choice, load_names_from_holdings
 from src.dashboard.vg_status import load_vg_status, vg6_blocking
+from bootstrap_cloud import cloud_readiness, READINESS_GUIDE
 
 st.set_page_config(page_title="0050 量化分析面板", layout="wide")
 P1, P2, P3 = Config(), Phase2Config(), Phase3Config()
@@ -33,6 +34,11 @@ P1, P2, P3 = Config(), Phase2Config(), Phase3Config()
 st.warning("⚠ " + P3.disclaimer_short + " " + DISCLAIMER)
 
 st.title(f"0050 量化分析面板 v{PHASE3_VERSION}")
+
+# ── 雲端就緒檢查（模型/快取缺失時明確引導，不空轉）──
+_ready = cloud_readiness(P3.model_path, Path("holdings.csv"))
+if not _ready["has_model"]:
+    st.info(READINESS_GUIDE)
 
 # ── 側欄：股票選擇（前十大 + 自選）──
 holdings_path = Path("holdings.csv")
