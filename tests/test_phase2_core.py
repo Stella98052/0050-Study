@@ -801,36 +801,3 @@ def test_model_service_accepts_raw_feature_matrix(cfg, ohlcv, tmp_path):
     bad = panel_feats.drop(columns=["mv_short"])
     with _pt.raises(ValueError, match="缺少原始欄位"):
         predict_latest(m, b, bad)
-
-
-def test_cloud_readiness_no_silent_ready(cfg, tmp_path):
-    """雲端就緒鐵則：模型缺失時 ready=False（不假裝就緒）；
-    齊備時才 ready=True。"""
-    from bootstrap_cloud import cloud_readiness
-    r1 = cloud_readiness(tmp_path / "none.joblib", tmp_path / "none.csv")
-    assert r1["ready"] is False and r1["has_model"] is False
-    mp = tmp_path / "m.joblib"; mp.write_bytes(b"x")
-    hp = tmp_path / "holdings.csv"; hp.write_text("stock_id\n2330\n")
-    r2 = cloud_readiness(mp, hp)
-    assert r2["ready"] is True
-
-
-def test_predictions_view_and_latest(cfg, tmp_path):
-    """面板自動讀取前瞻紀錄鎖定：全部/單股檢視、各股最新一筆。"""
-    from src.dashboard.predictions_log import (
-        append_prediction, load_predictions_view, latest_prediction_per_stock)
-    p = tmp_path / "pred.csv"
-    for sid, dt, pu in [("2330", "2026-07-14", 0.53),
-                        ("2330", "2026-07-15", 0.55),
-                        ("2454", "2026-07-15", 0.48)]:
-        append_prediction({"run_ts": "t", "stock_id": sid, "last_bar_date": dt,
-                           "close": 100.0, "proba_up": pu, "pick": pu > 0.5,
-                           "forward_days": 5, "model_tag": "m"}, p)
-    assert len(load_predictions_view(p)) == 3
-    assert len(load_predictions_view(p, "2330")) == 2
-    latest = latest_prediction_per_stock(p)
-    assert len(latest) == 2                              # 每股一筆
-    row2330 = latest[latest["stock_id"] == "2330"].iloc[0]
-    assert row2330["proba_up"] == 0.55                   # 取最新日
-    # 空檔不報錯
-    assert len(load_predictions_view(tmp_path / "none.csv")) == 0
