@@ -18,6 +18,16 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+# TWSE 端點會拒絕無瀏覽器標頭的請求（回 403 Forbidden），故所有請求帶 UA。
+# 這是抓取層對「TWSE 反爬」的必要相容，非偽裝——僅讀取官方公開日線資料。
+_TWSE_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/120.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.twse.com.tw/",
+}
+
 from config.config import Config
 from src.schemas import OHLCV_SCHEMA, FetchError
 
@@ -160,7 +170,8 @@ def fetch_stock_month(
         time.sleep(random.uniform(cfg.request_delay_sec_min, cfg.request_delay_sec_max))
         try:
             resp = sess.get(
-                cfg.twse_stock_day_url, params=params, timeout=cfg.request_timeout_sec
+                cfg.twse_stock_day_url, params=params,
+                headers=_TWSE_HEADERS, timeout=cfg.request_timeout_sec
             )
             resp.raise_for_status()
             df = parse_stock_day_json(resp.json(), stock_id)

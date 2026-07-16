@@ -36,7 +36,12 @@ def _try_mops(cfg: Config, session: requests.Session) -> tuple[str, ...] | None:
     回傳 None 表示此來源不可用（格式變動或連線失敗），由呼叫端換下一來源。
     """
     try:
-        resp = session.get(_MOPS_ETF_URL, timeout=cfg.request_timeout_sec)
+        resp = session.get(
+            _MOPS_ETF_URL, timeout=cfg.request_timeout_sec,
+            headers={"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    "Chrome/120.0 Safari/537.36"),
+                     "Accept": "application/json, text/plain, */*"})
         resp.raise_for_status()
     except Exception:                                # noqa: BLE001
         return None
