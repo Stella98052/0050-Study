@@ -51,21 +51,34 @@ else:
     st.sidebar.error("找不到 holdings.csv，請置於同目錄")
     holding_ids, names = [], {}
 
-# 自選股票：session_state 保存本次工作階段加入的代號
+# 自選股票（v3.9 修：輸入後自動加入+自動切換+清空輸入框——先前只加入
+# 清單不切換，畫面停在原股票，使用者感受為「無動作」）
 if "custom_ids" not in st.session_state:
     st.session_state.custom_ids = []
+st.session_state.holding_ids = holding_ids
+
+
+def _add_custom():
+    code = st.session_state.custom_input.strip()
+    st.session_state.custom_input = ""          # 清空輸入框
+    if not code:
+        return
+    if not code.isdigit() or not (4 <= len(code) <= 6):
+        st.session_state.custom_msg = f"「{code}」非有效代號（4–6 位數字）"
+        return
+    if (code not in st.session_state.custom_ids
+            and code not in st.session_state.holding_ids):
+        st.session_state.custom_ids.append(code)
+    st.session_state.stock_select = code        # 自動切換到該股
+    st.session_state.custom_msg = f"已切換至 {code}（首次載入需抓官方資料，請稍候）"
+
 
 st.sidebar.markdown("**自選股票**（0050 以外亦可，技術圖照算）")
-_new = st.sidebar.text_input("輸入台股代號後按 Enter（例：2337）",
-                             key="custom_input", max_chars=6)
-if _new:
-    code = _new.strip()
-    if not code.isdigit():
-        st.sidebar.warning("代號須為數字（上市/上櫃 4 位數）")
-    elif code in holding_ids or code in st.session_state.custom_ids:
-        st.sidebar.info(f"{code} 已在清單中")
-    else:
-        st.session_state.custom_ids.append(code)
+st.sidebar.text_input("輸入台股代號後按 Enter（例：2337）",
+                      key="custom_input", max_chars=6, on_change=_add_custom)
+_msg = st.session_state.pop("custom_msg", None)
+if _msg:
+    st.sidebar.info(_msg)
 if st.session_state.custom_ids:
     drop = st.sidebar.multiselect("移除自選", st.session_state.custom_ids)
     if drop:
@@ -81,8 +94,11 @@ def _label(x):
     return base if x in in_model_universe else f"{base}（自選）"
 
 
-sid = st.sidebar.selectbox("選擇股票", ids,
-                           format_func=_label) if ids else None
+# 防護：選中的股票被移除時退回第一檔
+if ids and st.session_state.get("stock_select") not in ids:
+    st.session_state.stock_select = ids[0]
+sid = st.sidebar.selectbox("選擇股票", ids, format_func=_label,
+                           key="stock_select") if ids else None
 st.sidebar.caption("資料源：TWSE 官方（逐月快取，禮貌延遲）；"
                    "首次載入新股票需抓取，較慢屬正常。自選股僅技術圖有效，"
                    "模型預測不適用（見下方說明）。")
