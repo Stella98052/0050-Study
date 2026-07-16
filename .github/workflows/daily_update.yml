@@ -2,7 +2,8 @@ name: 每日前瞻更新（收盤後）
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"      # 台北 20:00 = UTC 12:00，週一至週五
+    - cron: "0 10 * * 1-5"      # 台北 18:00 = UTC 10:00，週一至週五
+    - cron: "0 11 * * 1-5"      # 台北 19:00 = UTC 11:00，週一至週五
   workflow_dispatch: {}
 
 permissions:
