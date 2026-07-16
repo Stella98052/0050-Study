@@ -25,6 +25,7 @@ from src.dashboard.model_service import load_model_pack, predict_latest
 from src.dashboard.predictions_log import (prospective_progress,
                                            load_predictions_view,
                                            latest_prediction_per_stock)
+from src.dashboard.export import to_csv_bytes, coverage_caption
 from src.dashboard.stock_names import format_choice, load_names_from_holdings
 from src.dashboard.vg_status import load_vg_status, vg6_blocking
 from bootstrap_cloud import cloud_readiness, READINESS_GUIDE
@@ -122,6 +123,19 @@ if sid:
                    "計算有效；但模型預測卡不適用此股（模型未見過它），將隱藏。")
     st.subheader(f"{_label(sid)}｜末根K {view['last_bar_date']}"
                  f"｜收盤 {view['last_close']}")
+    st.caption(coverage_caption(view["ohlcv"]))
+    dl1, dl2, _sp = st.columns([1, 1, 2])
+    dl1.download_button(
+        "⬇ 下載K線 CSV", to_csv_bytes(view["ohlcv"]),
+        file_name=f"{sid}_ohlcv.csv", mime="text/csv",
+        help="十年官方日K（開高低收量），Excel 可直接開啟")
+    _feat_export = view["features"].drop(
+        columns=[c for c in ("fwd_return_gross", "fwd_return_net", "label_up")
+                 if c in view["features"].columns])
+    dl2.download_button(
+        "⬇ 下載特徵 CSV", to_csv_bytes(_feat_export),
+        file_name=f"{sid}_features.csv", mime="text/csv",
+        help="技術特徵全表（MV潮汐/RSI/MACD/波浪標籤等，不含未來報酬欄）")
     st.plotly_chart(make_candles_figure(tail, view["pivots_retro"],
                                         view["pivots_rt"], lookback_start),
                     width='stretch')

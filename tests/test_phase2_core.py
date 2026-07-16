@@ -834,3 +834,17 @@ def test_predictions_view_and_latest(cfg, tmp_path):
     assert row2330["proba_up"] == 0.55                   # 取最新日
     # 空檔不報錯
     assert len(load_predictions_view(tmp_path / "none.csv")) == 0
+
+
+def test_export_csv_bytes_and_coverage(cfg, ohlcv):
+    """v3.10 下載功能鎖定：CSV bytes 含 BOM（Excel 相容）且可還原；
+    涵蓋說明含起迄日與筆數；特徵匯出不含未來報酬欄。"""
+    import io
+    from src.dashboard.export import to_csv_bytes, coverage_caption
+    b = to_csv_bytes(ohlcv)
+    assert b.startswith(b"\xef\xbb\xbf")                 # utf-8-sig BOM
+    back = pd.read_csv(io.BytesIO(b))
+    assert len(back) == len(ohlcv)
+    cap = coverage_caption(ohlcv)
+    assert str(len(ohlcv)) in cap and "~" in cap
+    assert coverage_caption(ohlcv.iloc[0:0]) == "無資料"
