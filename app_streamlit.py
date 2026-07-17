@@ -27,6 +27,7 @@ from src.dashboard.predictions_log import (prospective_progress,
                                            latest_prediction_per_stock)
 from src.dashboard.export import to_csv_bytes, coverage_caption
 from src.dashboard.stock_names import format_choice, load_names_from_holdings
+from src.dashboard.watchlist import parse_watch_param, serialize_watch
 from src.dashboard.vg_status import load_vg_status, vg6_blocking
 from bootstrap_cloud import cloud_readiness, READINESS_GUIDE
 
@@ -55,7 +56,9 @@ else:
 # 自選股票（v3.9 修：輸入後自動加入+自動切換+清空輸入框——先前只加入
 # 清單不切換，畫面停在原股票，使用者感受為「無動作」）
 if "custom_ids" not in st.session_state:
-    st.session_state.custom_ids = []
+    # v3.11：自選清單從網址參數還原（書籤保存）
+    st.session_state.custom_ids = parse_watch_param(
+        st.query_params.get("watch", ""))
 st.session_state.holding_ids = holding_ids
 
 
@@ -85,6 +88,15 @@ if st.session_state.custom_ids:
     if drop:
         st.session_state.custom_ids = [
             c for c in st.session_state.custom_ids if c not in drop]
+
+# v3.11：清單同步至網址參數（idempotent；書籤即存檔）
+if st.session_state.custom_ids:
+    st.query_params["watch"] = serialize_watch(st.session_state.custom_ids)
+elif "watch" in st.query_params:
+    del st.query_params["watch"]
+if st.session_state.custom_ids:
+    st.sidebar.caption("💾 自選清單已寫入網址——將目前網址加入瀏覽器書籤，"
+                       "下次開啟自動還原清單。")
 
 ids = holding_ids + st.session_state.custom_ids
 in_model_universe = set(holding_ids)     # 僅前十大在模型訓練範圍內

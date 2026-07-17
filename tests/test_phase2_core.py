@@ -848,3 +848,16 @@ def test_export_csv_bytes_and_coverage(cfg, ohlcv):
     cap = coverage_caption(ohlcv)
     assert str(len(ohlcv)) in cap and "~" in cap
     assert coverage_caption(ohlcv.iloc[0:0]) == "無資料"
+
+
+def test_watchlist_param_roundtrip(cfg):
+    """v3.11 自選清單持久化鎖定：解析僅收合法代號、去重保序、上限30；
+    序列化↔解析可往返。"""
+    from src.dashboard.watchlist import parse_watch_param, serialize_watch
+    assert parse_watch_param("6669,2337,abc,12,6669, 2454 ") == \
+        ["6669", "2337", "2454"]                          # 濾非法+去重+去空白
+    assert parse_watch_param("") == [] and parse_watch_param(None) == []
+    many = ",".join(str(1000 + i) for i in range(40))
+    assert len(parse_watch_param(many)) == 30             # 上限
+    ids = ["6669", "2337"]
+    assert parse_watch_param(serialize_watch(ids)) == ids  # 往返一致
