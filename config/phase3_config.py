@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PHASE3_VERSION = "3.11"
+PHASE3_VERSION = "3.13"
 
 
 @dataclass(frozen=True)

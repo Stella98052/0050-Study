@@ -21,6 +21,10 @@ def load_stock_view(stock_id: str, p1: Config, p2: Phase2Config,
     end = date.today()
     start = end - timedelta(days=p1.history_years * 365)
     df = fetch_stock_history(stock_id, start, end, p1)
+    if len(df) == 0:
+        raise ValueError(
+            f"{stock_id} 查無官方日K資料：可能為上櫃(TPEx)/興櫃股票或"
+            f"代號不存在——本系統目前僅支援上市(TWSE)股票。")
     df = df.sort_values("date").reset_index(drop=True)
     piv_retro = compute_pivots_retrospective(df, p1)
     piv_rt = compute_pivots_realtime(df, end, p1)

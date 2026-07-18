@@ -123,7 +123,13 @@ def _view(stock_id: str, cache_key: str):
 
 
 if sid:
-    view = _view(sid, pd.Timestamp.today().strftime("%Y-%m-%d"))
+    try:
+        view = _view(sid, pd.Timestamp.today().strftime("%Y-%m-%d"))
+    except Exception as exc:                     # v3.13：不噴 traceback
+        st.error(f"⚠ 無法載入 {sid}：{exc}")
+        st.info("提示：上櫃/興櫃股票與錯誤代號目前不支援；"
+                "可從「移除自選」把此代號刪除。")
+        st.stop()
     tail = view["ohlcv_tail"]
     lookback_start = pd.to_datetime(tail["date"].iloc[0])
 
@@ -160,8 +166,18 @@ if sid:
     st.subheader("模型預測卡")
     if is_custom:
         st.info("此為自選股，不在模型訓練範圍（模型僅以 0050 前十大訓練），"
-                "故不提供模型預測。上方技術圖（K線/波浪/MV 潮汐）仍有效，"
-                "可據方法論人工研判。")
+                "故不提供模型預測；以下技術快照為官方資料即時計算，有效。")
+        fl = view["features"].tail(1).iloc[0]
+        t1, t2, t3, t4 = st.columns(4)
+        t1.metric("realtime 波浪", str(fl["wave_label_realtime"]))
+        _veto = bool(fl.get("mv_mid_veto_active", False))
+        t2.metric("13MV 核心否決線", "⚠ 下彎(否決)" if _veto else "未觸發")
+        _dir = {1: "↑ 上揚", -1: "↓ 下彎", 0: "→ 持平"}
+        t3.metric("5MV 方向", _dir.get(int(fl.get("mv_short_direction", 0)), "—"))
+        _bias = fl.get("mv_bias")
+        t4.metric("量能乖離率", f"{_bias:.1%}" if pd.notna(_bias) else "—")
+        if _veto:
+            st.error("⚠ 13MV 下彎＝方法論絕對否決訊號，凌駕任何波浪判讀。")
         model = None
     else:
         blocked, msg = vg6_blocking(P3.report_json)

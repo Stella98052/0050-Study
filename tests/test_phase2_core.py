@@ -861,3 +861,18 @@ def test_watchlist_param_roundtrip(cfg):
     assert len(parse_watch_param(many)) == 30             # 上限
     ids = ["6669", "2337"]
     assert parse_watch_param(serialize_watch(ids)) == ids  # 往返一致
+
+
+def test_load_stock_view_empty_data_raises_friendly(cfg, monkeypatch):
+    """v3.13 鎖定：抓到空資料（上櫃/錯誤代號）→ 明確 ValueError 帶指引，
+    不讓空表流進下游炸 IndexError。"""
+    import src.dashboard.data_service as ds
+    monkeypatch.setattr(ds, "fetch_stock_history",
+                        lambda sid, s, e, c: pd.DataFrame(
+                            columns=["stock_id", "date", "open", "high",
+                                     "low", "close", "volume"]))
+    from config.phase2_config import Phase2Config
+    from config.phase3_config import Phase3Config
+    import pytest as _pt
+    with _pt.raises(ValueError, match="上櫃"):
+        ds.load_stock_view("6488", cfg, Phase2Config(), Phase3Config())
