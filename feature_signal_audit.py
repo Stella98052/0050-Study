@@ -276,6 +276,9 @@ def main() -> int:
                     help="第四優先：依 TWSE 官方產業分類分組重跑診斷")
     ap.add_argument("--industry-csv", type=Path, default=Path("industry_map.csv"),
                     help="官方分類不可用時的人工對照 CSV")
+    ap.add_argument("--extra-symbols", type=str, default="",
+                    help="逗號分隔之額外股票代號（方案A：擴充池特徵稽核，"
+                         "僅用開發集、不碰 holdout、不重訓模型）")
     args = ap.parse_args()
     if not args.holdings.exists():
         print(f"[中止] 找不到 {args.holdings.resolve()}")
@@ -285,8 +288,15 @@ def main() -> int:
     end = date.today()
     start = end - timedelta(days=p1.history_years * 365)
     snap = load_holdings_from_csv(args.holdings, end)
+    extra = [c.strip() for c in args.extra_symbols.split(",")
+             if c.strip().isdigit()]
+    all_ids = list(snap.stock_ids) + [c for c in extra
+                                      if c not in snap.stock_ids]
+    if extra:
+        print(f"方案A擴充池稽核：前十大 + 額外 {extra}"
+              f"（僅開發集診斷，不碰 holdout、不重訓）")
     frames = {sid: fetch_stock_history(sid, start, end, p1)
-              for sid in snap.stock_ids}
+              for sid in all_ids}
     parts = []
     for sid, df in frames.items():
         f = build_feature_matrix(df, p1, p2)
@@ -394,6 +404,11 @@ def main() -> int:
                 print(f"    → {rpt.verdict}{flag}")
         for line in final_search_verdict(new_feats, old_feats, probe_reports):
             print(line)
+    if extra:
+        print("\n⚠ 選股偏誤警語（預先聲明）：額外代號若因『表現好才被選入』，"
+              "擴充池結果帶入選擇偏誤——任何顯著發現須先以客觀納入規則"
+              "（如市值/流動性門檻於過去某日的全名單）重跑確認，才可宣告。")
+
     if args.by_industry:
         run_industry_audit(dev, sub, audit_cols, args, p1, p2, start, hstart)
 

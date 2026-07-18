@@ -229,6 +229,8 @@ if sid:
         st.markdown("**各股最新預測**（每日自動更新，非即時報價）")
         show = latest[["stock_id", "last_bar_date", "close",
                        "proba_up", "pick"]].copy()
+        show["stock_id"] = show["stock_id"].map(
+            lambda x: format_choice(x, names))          # v3.12：代碼帶名稱
         show["last_bar_date"] = show["last_bar_date"].dt.strftime("%Y-%m-%d")
         show["proba_up"] = (show["proba_up"] * 100).round(1).astype(str) + "%"
         show["pick"] = show["pick"].map({True: "看多", False: "觀望"})
