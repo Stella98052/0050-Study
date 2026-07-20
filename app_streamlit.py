@@ -98,6 +98,26 @@ elif "watch" in st.query_params:
 if st.session_state.custom_ids:
     st.sidebar.caption("💾 自選清單已寫入網址——將目前網址加入瀏覽器書籤，"
                        "下次開啟自動還原清單。")
+    # ── 自選股資料儲存（面板內，v3.17）──
+    with st.sidebar.expander("📦 儲存自選股資料"):
+        _val = st.checkbox("含官方估值（本益比/殖利率/淨值比）",
+                           value=False, key="wl_val")
+        if st.button("產生下載包", key="wl_build"):
+            from src.custom.fetch_and_save import build_watchlist_zip
+            with st.spinner("以官方管線產出中（首次含抓取，請稍候）…"):
+                zb, sums = build_watchlist_zip(
+                    st.session_state.custom_ids, P1, P2, with_valuation=_val)
+            st.session_state.wl_zip = zb
+            st.session_state.wl_sums = sums
+        if st.session_state.get("wl_zip"):
+            for r in st.session_state.get("wl_sums", []):
+                st.caption(("✓" if r["ok"] else "✗")
+                           + f" {r['stock_id']}：{r['msg']}")
+            st.download_button(
+                "⬇ 下載自選股資料包 (ZIP)", st.session_state.wl_zip,
+                file_name="watchlist_data.zip", mime="application/zip",
+                key="wl_dl",
+                help="每檔含 K線/特徵 CSV（無未來報酬欄），與模型池隔離")
 
 ids = holding_ids + st.session_state.custom_ids
 in_model_universe = set(holding_ids)     # 僅前十大在模型訓練範圍內

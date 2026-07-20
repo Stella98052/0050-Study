@@ -1038,3 +1038,25 @@ def test_custom_saver_isolation_and_no_future_cols(cfg, ohlcv, tmp_path):
     w.write_text("# 註解\nstock_id,note,added_date\n6669,,2026-07-19\nabc,,\n",
                  encoding="utf-8")
     assert load_watchlist(w) == ["6669"]
+
+
+def test_watchlist_zip_contents_and_no_future_cols(cfg, ohlcv):
+    """v3.17 面板儲存鎖定：ZIP 內每檔含 ohlcv+features、特徵無未來報酬欄、
+    失敗股誠實列摘要不進包。"""
+    import io
+    import zipfile as zf
+    from src.custom.fetch_and_save import build_watchlist_zip
+
+    def _fetch(sid, a, b, c):
+        return ohlcv.assign(stock_id=sid) if sid == "6669" else ohlcv.iloc[0:0]
+    zb, sums = build_watchlist_zip(["6669", "9998"], cfg, Phase2Config(),
+                                   fetch_fn=_fetch)
+    z = zf.ZipFile(io.BytesIO(zb))
+    names = z.namelist()
+    assert "6669_ohlcv.csv" in names and "6669_features.csv" in names
+    assert not any("9998" in n for n in names)             # 失敗股不進包
+    ok = {r["stock_id"]: r["ok"] for r in sums}
+    assert ok == {"6669": True, "9998": False}
+    f = pd.read_csv(io.BytesIO(z.read("6669_features.csv")))
+    assert not any(c in f.columns for c in
+                   ("fwd_return_gross", "fwd_return_net", "label_up"))

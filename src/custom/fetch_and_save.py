@@ -59,3 +59,53 @@ def load_watchlist(path: Path) -> list[str]:
     df = pd.read_csv(path, dtype=str, comment="#")
     col = "stock_id" if "stock_id" in df.columns else df.columns[0]
     return [c.strip() for c in df[col].dropna() if str(c).strip().isdigit()]
+
+
+def build_watchlist_zip(stock_ids: list[str], p1, p2,
+                        with_valuation: bool = False,
+                        fetch_fn=None) -> tuple[bytes, list[dict]]:
+    """自選清單 → 記憶體 ZIP（面板一鍵下載用；與 CLI 完全同引擎）。
+
+    回傳 (zip_bytes, 各股摘要)。瀏覽器無法讓伺服器直接寫檔到使用者
+    電腦，故面板內儲存的正確形態＝打包後下載。"""
+    import io
+    import zipfile as _zf
+    from datetime import date, timedelta
+    from src.features.feature_matrix import build_feature_matrix
+    from src.fetch.twse_daily import fetch_stock_history
+    fetch = fetch_fn or fetch_stock_history
+    end = date.today()
+    start = end - timedelta(days=p1.history_years * 365)
+    buf = io.BytesIO()
+    summaries = []
+    with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as z:
+        for sid in dict.fromkeys(stock_ids):
+            try:
+                df = fetch(sid, start, end, p1)
+            except Exception as exc:                      # noqa: BLE001
+                summaries.append({"stock_id": sid, "ok": False,
+                                  "msg": f"{type(exc).__name__}: {exc}"})
+                continue
+            if len(df) == 0:
+                summaries.append({"stock_id": sid, "ok": False,
+                                  "msg": "查無官方日K（上櫃/興櫃或代號不存在）"})
+                continue
+            df = df.sort_values("date").reset_index(drop=True)
+            z.writestr(f"{sid}_ohlcv.csv",
+                       df.to_csv(index=False).encode("utf-8-sig"))
+            feats = build_feature_matrix(df, p1, p2)
+            feats = feats.drop(columns=[c for c in _FUTURE_COLS
+                                        if c in feats.columns])
+            z.writestr(f"{sid}_features.csv",
+                       feats.to_csv(index=False).encode("utf-8-sig"))
+            extra = ""
+            if with_valuation:
+                from src.fetch.twse_bwibbu import fetch_valuation_history
+                val = fetch_valuation_history(sid, start, end, p1)
+                if len(val):
+                    z.writestr(f"{sid}_valuation.csv",
+                               val.to_csv(index=False).encode("utf-8-sig"))
+                    extra = f"｜估值 {len(val)} 列"
+            summaries.append({"stock_id": sid, "ok": True,
+                              "msg": f"{len(df)} 根日K{extra}"})
+    return buf.getvalue(), summaries
