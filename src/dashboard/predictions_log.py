@@ -68,3 +68,13 @@ def latest_prediction_per_stock(path):
     return (df.sort_values("last_bar_date")
               .groupby("stock_id", as_index=False).tail(1)
               .sort_values("stock_id").reset_index(drop=True))
+
+
+def staleness_days(path, today=None) -> int | None:
+    """最新前瞻紀錄距今天數（無紀錄回 None）。純函式供面板警示。"""
+    import pandas as pd
+    df = load_predictions_view(path)
+    if len(df) == 0:
+        return None
+    t = pd.Timestamp(today) if today is not None else pd.Timestamp.today()
+    return int((t.normalize() - df["last_bar_date"].max().normalize()).days)

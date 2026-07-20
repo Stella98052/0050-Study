@@ -16,8 +16,6 @@ from pathlib import Path
 _DIST_TO_IMPORT = {
     "scikit-learn": "sklearn",
     "beautifulsoup4": "bs4",
-    "beautifulsoup4": "bs4",
-    "beautifulsoup4": "bs4",
     "pytest": "pytest",
 }
 # 純測試/繪圖類，執行期核心邏輯非必需 → 自檢不強制（缺了不擋核心）

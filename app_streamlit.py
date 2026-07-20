@@ -24,10 +24,12 @@ from src.dashboard.data_service import load_stock_view
 from src.dashboard.model_service import load_model_pack, predict_latest
 from src.dashboard.predictions_log import (prospective_progress,
                                            load_predictions_view,
-                                           latest_prediction_per_stock)
+                                           latest_prediction_per_stock,
+                                           staleness_days)
 from src.dashboard.export import to_csv_bytes, coverage_caption
 from src.dashboard.stock_names import format_choice, load_names_from_holdings
 from src.dashboard.tidal import DIR_TEXT, TIDAL_DISCLAIMER, tidal_state
+from src.dashboard.interpret import interpret_card
 from src.dashboard.watchlist import parse_watch_param, serialize_watch
 from src.dashboard.vg_status import load_vg_status, vg6_blocking
 from bootstrap_cloud import cloud_readiness, READINESS_GUIDE
@@ -143,8 +145,8 @@ def _view(stock_id: str, cache_key: str):
     return load_stock_view(stock_id, P1, P2, P3)
 
 
-def _render_tidal_snapshot(fl):
-    """潮汐快照一列（前十大與自選股共用，v3.14 P1）。"""
+def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False):
+    """潮汐快照+解讀結論（前十大與自選股共用；v3.14 P1、v3.19 解讀）。"""
     sd = int(fl.get("mv_short_direction", 0))
     md = int(fl.get("mv_mid_direction", 0))
     veto = bool(fl.get("mv_mid_veto_active", False))
@@ -161,6 +163,18 @@ def _render_tidal_snapshot(fl):
     if stt["emoji"] == "🔴":
         st.error("⚠ " + stt["desc"] + "（凌駕任何模型/波浪判讀）")
     st.caption(TIDAL_DISCLAIMER)
+    # ── 解讀結論（v3.19：規則驅動，零猜想）──
+    itp = interpret_card(
+        proba=_itp_proba, mv_short_dir=sd, mv_mid_dir=md, veto=veto,
+        bias=(float(_b) if pd.notna(_b) else None), burst=burst,
+        wave_label=str(fl.get("wave_label_realtime", "")),
+        is_custom=_itp_custom)
+    with st.expander(f"📋 解讀結論：{itp['emoji']} {itp['state']}",
+                     expanded=True):
+        st.markdown(f"**方法論判讀**：{itp['method']}")
+        st.markdown(f"**模型數字定位**：{itp['model_note']}")
+        st.markdown(f"**行動語意**：{itp['action']}")
+        st.caption(itp["disclaimer"])
 
 
 if sid:
@@ -210,7 +224,7 @@ if sid:
                 "故不提供模型預測；以下技術快照為官方資料即時計算，有效。")
         fl = view["features"].tail(1).iloc[0]
         st.metric("realtime 波浪", str(fl["wave_label_realtime"]))
-        _render_tidal_snapshot(fl)
+        _render_tidal_snapshot(fl, _itp_custom=True)
         model = None
     else:
         blocked, msg = vg6_blocking(P3.report_json)
@@ -241,7 +255,7 @@ if sid:
             st.caption(f"模型：{pred['model_tag']}｜特徵基準日 {pred['as_of']}"
                        f"｜{P3.disclaimer_short}")
             st.markdown("**潮汐快照**")
-            _render_tidal_snapshot(feats_last)
+            _render_tidal_snapshot(feats_last, _itp_proba=pred["proba_up"])
 
     # ── VG 驗證狀態小卡（全模型層級，對每檔股票相同）──
     st.subheader("驗證關卡狀態（全模型層級，非單股）")
@@ -277,6 +291,11 @@ if sid:
         st.info("尚無前瞻紀錄。GitHub Actions「每日前瞻更新」每交易日 22:00 "
                 "自動累積；也可在 repo 的 Actions 分頁手動 Run workflow 立即產生。")
     else:
+        _stale = staleness_days(P3.predictions_csv)
+        if _stale is not None and _stale > 4:
+            st.warning(f"⏰ 前瞻紀錄已 {_stale} 天未更新——watchdog 每晚 21:10 "
+                       f"自動檢查並補跑；亦可至 GitHub Actions 手動 Run "
+                       f"「每日前瞻更新」。連假期間屬正常。")
         st.markdown("**各股最新預測**（每日自動更新，非即時報價）")
         show = latest[["stock_id", "last_bar_date", "close",
                        "proba_up", "pick"]].copy()

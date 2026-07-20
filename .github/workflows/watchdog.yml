@@ -1,0 +1,59 @@
+name: 前瞻更新監督（watchdog）
+
+# 台北 21:10（UTC 13:10）——在 18:10/19:10 雙排程之後檢查；
+# 本 workflow 亦受 GitHub 排程延遲影響，但當晚任何時間補查皆有效
+on:
+  schedule:
+    - cron: "10 13 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write        # 補觸發 daily_update
+  issues: write         # 開 Issue 通知
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 檢查今日前瞻紀錄是否存在
+        id: check
+        run: |
+          python - << 'PY'
+          import csv, datetime, os, pathlib
+          today = datetime.date.today()  # runner UTC；台北 21:10 = UTC 13:10 同日
+          p = pathlib.Path("data/predictions.csv")
+          stale = True
+          latest = "（無檔案）"
+          if p.exists():
+              with p.open(encoding="utf-8") as f:
+                  dates = [r.get("last_bar_date", "") for r in csv.DictReader(f)]
+              dates = [d for d in dates if d]
+              if dates:
+                  latest = max(dates)
+                  stale = latest < today.isoformat()
+          print(f"最新紀錄日={latest}｜今日={today}｜stale={stale}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as g:
+              g.write(f"stale={'true' if stale else 'false'}\n")
+              g.write(f"latest={latest}\n")
+          PY
+      - name: 補觸發每日更新
+        if: steps.check.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "今日無前瞻紀錄，補觸發 daily_update…"
+          gh workflow run daily_update.yml --ref main
+      - name: 開 Issue 通知
+        if: steps.check.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "⏰ 每日前瞻更新未如期執行 $(date -u +%Y-%m-%d)" \
+            --body "watchdog 檢查：predictions.csv 最新紀錄日=${{ steps.check.outputs.latest }}，非今日。已自動補觸發 daily_update（GitHub 排程延遲為平台特性）。**若今日為台股休市日，此通知可忽略關閉。**請稍後確認 Actions 補跑結果。"

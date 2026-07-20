@@ -1060,3 +1060,39 @@ def test_watchlist_zip_contents_and_no_future_cols(cfg, ohlcv):
     f = pd.read_csv(io.BytesIO(z.read("6669_features.csv")))
     assert not any(c in f.columns for c in
                    ("fwd_return_gross", "fwd_return_net", "label_up"))
+
+
+def test_predictions_staleness_days(cfg, tmp_path):
+    """v3.18 watchdog 配套鎖定：過期天數計算；無紀錄回 None。"""
+    from src.dashboard.predictions_log import append_prediction, staleness_days
+    p = tmp_path / "pred.csv"
+    assert staleness_days(p) is None
+    append_prediction({"run_ts": "t", "stock_id": "2330",
+                       "last_bar_date": "2026-07-15", "close": 100.0,
+                       "proba_up": 0.5, "pick": False, "forward_days": 5,
+                       "model_tag": "m"}, p)
+    assert staleness_days(p, today="2026-07-20") == 5
+    assert staleness_days(p, today="2026-07-15") == 0
+
+
+def test_interpret_card_rules(cfg):
+    """v3.19 解讀鎖定：四狀態行動語意、水位×方向互補語句（爆量+觀望）、
+    模型定位固定含「無判別力」、自選股不適用語句、否決凌駕。"""
+    from src.dashboard.interpret import interpret_card
+    # 爆量但觀望 → 水位/方向互補解讀 + 等表態
+    r = interpret_card(proba=0.595, mv_short_dir=0, mv_mid_dir=0, veto=False,
+                       bias=0.265, burst=True, wave_label="2")
+    assert r["emoji"] == "⚪" and "方向" in r["method"] and "水位" in r["method"]
+    assert "無判別力" in r["model_note"] and "等 5MV" in r["action"]
+    # 真波段+爆量 → 成色語句；13MV 下彎出場
+    g = interpret_card(proba=0.48, mv_short_dir=1, mv_mid_dir=1, veto=False,
+                       bias=0.226, burst=True, wave_label="2")
+    assert g["emoji"] == "🟢" and "成色" in g["method"] and "13MV 轉下彎即出場" in g["action"]
+    # 否決凌駕
+    v = interpret_card(proba=0.7, mv_short_dir=1, mv_mid_dir=1, veto=True,
+                       bias=None, burst=False, wave_label=None)
+    assert v["emoji"] == "🔴" and "立即出場" in v["action"]
+    # 自選股
+    c = interpret_card(proba=None, mv_short_dir=1, mv_mid_dir=0, veto=False,
+                       bias=0.1, burst=False, wave_label="3", is_custom=True)
+    assert "不適用" in c["model_note"] and c["emoji"] == "🟡"
