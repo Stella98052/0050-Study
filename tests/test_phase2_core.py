@@ -1096,3 +1096,20 @@ def test_interpret_card_rules(cfg):
     c = interpret_card(proba=None, mv_short_dir=1, mv_mid_dir=0, veto=False,
                        bias=0.1, burst=False, wave_label="3", is_custom=True)
     assert "不適用" in c["model_note"] and c["emoji"] == "🟡"
+
+
+def test_company_names_parser_field_driven(cfg):
+    """v3.20 鎖定：t187ap03_L 名稱解析——簡稱優先/名稱備援、欄名驅動、
+    非數字代號剔除、空值不入。"""
+    from src.dashboard.stock_names import parse_company_names
+    rows = [
+        {"公司代號": "6669", "公司名稱": "緯穎科技服務股份有限公司",
+         "公司簡稱": "緯穎"},
+        {"公司代號": "2891", "公司名稱": "中國信託金融控股股份有限公司",
+         "公司簡稱": ""},                                  # 簡稱空→用名稱
+        {"公司代號": "合計", "公司簡稱": "X"},              # 非數字剔除
+    ]
+    m = parse_company_names(rows)
+    assert m["6669"] == "緯穎"
+    assert m["2891"].startswith("中國信託")
+    assert "合計" not in m and parse_company_names([]) == {}

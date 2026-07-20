@@ -27,7 +27,10 @@ from src.dashboard.predictions_log import (prospective_progress,
                                            latest_prediction_per_stock,
                                            staleness_days)
 from src.dashboard.export import to_csv_bytes, coverage_caption
-from src.dashboard.stock_names import format_choice, load_names_from_holdings
+from src.dashboard.stock_names import (format_choice,
+                                       fetch_all_listed_names,
+                                       load_names_from_holdings)
+from src.custom.fetch_and_save import load_watchlist
 from src.dashboard.tidal import DIR_TEXT, TIDAL_DISCLAIMER, tidal_state
 from src.dashboard.interpret import interpret_card
 from src.dashboard.watchlist import parse_watch_param, serialize_watch
@@ -49,9 +52,18 @@ if not _ready["has_model"]:
 
 # ── 側欄：股票選擇（前十大 + 自選）──
 holdings_path = Path("holdings.csv")
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _all_listed_names():
+    """官方全市場代號→簡稱（t187ap03_L；自選股名稱用，快取一天）。"""
+    return fetch_all_listed_names()
+
+
 if holdings_path.exists():
     holding_ids = pd.read_csv(holdings_path, dtype=str)["stock_id"].tolist()
-    names = load_names_from_holdings(holdings_path)   # 官方同源名稱，禁手寫
+    # v3.20：官方全市場為底、holdings 同源名稱覆蓋（皆官方，禁手寫）
+    names = {**_all_listed_names(), **load_names_from_holdings(holdings_path)}
 else:
     st.sidebar.error("找不到 holdings.csv，請置於同目錄")
     holding_ids, names = [], {}
@@ -59,9 +71,11 @@ else:
 # 自選股票（v3.9 修：輸入後自動加入+自動切換+清空輸入框——先前只加入
 # 清單不切換，畫面停在原股票，使用者感受為「無動作」）
 if "custom_ids" not in st.session_state:
-    # v3.11：自選清單從網址參數還原（書籤保存）
-    st.session_state.custom_ids = parse_watch_param(
-        st.query_params.get("watch", ""))
+    # v3.20：repo 凍結清單（永久）∪ 網址參數（書籤）——雲端檔案系統
+    # 每次重新部署即清空，唯一跨部署的永久儲存＝repo 內 custom_watchlist.csv
+    _repo_wl = load_watchlist(Path("custom_watchlist.csv"))
+    _url_wl = parse_watch_param(st.query_params.get("watch", ""))
+    st.session_state.custom_ids = list(dict.fromkeys(_repo_wl + _url_wl))
 st.session_state.holding_ids = holding_ids
 
 
@@ -98,8 +112,9 @@ if st.session_state.custom_ids:
 elif "watch" in st.query_params:
     del st.query_params["watch"]
 if st.session_state.custom_ids:
-    st.sidebar.caption("💾 自選清單已寫入網址——將目前網址加入瀏覽器書籤，"
-                       "下次開啟自動還原清單。")
+    st.sidebar.caption("💾 保存清單兩種方式：①將目前網址加入書籤（本瀏覽器）"
+                       "②把代號寫入 repo 的 custom_watchlist.csv 後 push"
+                       "（永久，所有裝置開啟即載入）。")
     # ── 自選股資料儲存（面板內，v3.17）──
     with st.sidebar.expander("📦 儲存自選股資料"):
         _val = st.checkbox("含官方估值（本益比/殖利率/淨值比）",

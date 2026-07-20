@@ -30,3 +30,32 @@ def format_choice(stock_id: str, names: dict[str, str]) -> str:
     """下拉顯示字串：有名稱→『2330 台積電』；無→『2330』（不捏造）。"""
     nm = names.get(stock_id)
     return f"{stock_id} {nm}" if nm else stock_id
+
+
+_T187_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+_NAME_KEYS = ("公司簡稱", "公司名稱", "Name", "companyName")
+_CODE_KEYS = ("公司代號", "Code", "companyCode")
+
+
+def parse_company_names(rows: list[dict]) -> dict[str, str]:
+    """t187ap03_L JSON → {代號: 簡稱}（欄名驅動；簡稱優先、名稱備援）。"""
+    out: dict[str, str] = {}
+    for r in rows or []:
+        sid = next((str(r[k]).strip() for k in _CODE_KEYS if k in r), "")
+        nm = next((str(r[k]).strip() for k in _NAME_KEYS
+                   if k in r and str(r[k]).strip()), "")
+        if sid.isdigit() and nm:
+            out[sid] = nm
+    return out
+
+
+def fetch_all_listed_names(timeout: int = 15) -> dict[str, str]:
+    """官方全市場代號→簡稱（自選股名稱用）；失敗回空 dict 不擋面板。"""
+    import requests
+    try:
+        r = requests.get(_T187_URL, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        r.raise_for_status()
+        return parse_company_names(r.json())
+    except Exception:                                     # noqa: BLE001
+        return {}
