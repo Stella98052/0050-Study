@@ -15,3 +15,5 @@ scipy>=1.13            # 本機實測 1.18.0
 lxml>=4.9              # MOPS 月營收 HTML 解析（pd.read_html 首選）
 html5lib>=1.1          # pd.read_html 備援解析器
 beautifulsoup4>=4.12   # pd.read_html html5lib 解析鏈必需（CI L47）
+beautifulsoup4>=4.12   # pd.read_html html5lib 解析鏈必需
+beautifulsoup4>=4.12   # pd.read_html html5lib 解析鏈必需
