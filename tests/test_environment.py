@@ -15,6 +15,7 @@ from pathlib import Path
 # 套件發行名 → import 名（僅列名稱不一致者；其餘同名自動處理）
 _DIST_TO_IMPORT = {
     "scikit-learn": "sklearn",
+    "beautifulsoup4": "bs4",
     "pytest": "pytest",
 }
 # 純測試/繪圖類，執行期核心邏輯非必需 → 自檢不強制（缺了不擋核心）
