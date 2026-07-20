@@ -876,3 +876,165 @@ def test_load_stock_view_empty_data_raises_friendly(cfg, monkeypatch):
     import pytest as _pt
     with _pt.raises(ValueError, match="上櫃"):
         ds.load_stock_view("6488", cfg, Phase2Config(), Phase3Config())
+
+
+# ===== v3.14 P1+P2 鎖定測試 =====
+
+def test_tidal_state_machine_four_states(cfg):
+    """潮汐狀態機鎖定：13MV 三結論 + 觀望，四態窮舉；否決凌駕一切。"""
+    from src.dashboard.tidal import tidal_state
+    assert tidal_state(1, 1, False)["emoji"] == "🟢"      # 真波段
+    assert tidal_state(1, 0, False)["emoji"] == "🟡"      # 僅短線
+    assert tidal_state(0, 0, False)["emoji"] == "⚪"      # 觀望
+    assert tidal_state(1, -1, False)["emoji"] == "🔴"     # 13MV↓
+    assert tidal_state(1, 1, True)["emoji"] == "🔴"       # 否決旗標凌駕同步上揚
+
+
+def test_bwibbu_parser_and_numeric_guard(cfg):
+    """BWIBBU 解析鎖定：民國日期轉西元、'-'→NaN、千分位、stat!=OK→空表。"""
+    from src.fetch.twse_bwibbu import parse_bwibbu_json
+    # 新版 6 欄（2026/7/17 實抓節錄）：fields 對映、中文年月日、int 股利年度
+    payload = {"stat": "OK",
+               "fields": ["日期", "殖利率(%)", "股利年度", "本益比",
+                          "股價淨值比", "財報年/季"],
+               "data": [
+        ["115年07月15日", "2.35", 114, "18.52", "3.10", "115/1"],
+        ["115/07/16", "-", 114, "-", "3.12", "115/1"],   # 斜線格式亦兼容
+    ]}
+    df = parse_bwibbu_json(payload, "2330")
+    assert len(df) == 2
+    assert df["date"].iloc[0] == pd.Timestamp("2026-07-15")
+    assert df["pe_ratio"].iloc[0] == 18.52
+    assert pd.isna(df["pe_ratio"].iloc[1])               # '-' → NaN
+    # 舊版 4 欄且順序不同（L41：歷史改版）——fields 對映須解出正確語意
+    old_payload = {"stat": "OK",
+                   "fields": ["日期", "本益比", "殖利率(%)", "股價淨值比"],
+                   "data": [["105年07月15日", "12.50", "3.80", "2.90"]]}
+    df2 = parse_bwibbu_json(old_payload, "2330")
+    assert df2["pe_ratio"].iloc[0] == 12.50              # 位置1=本益比（非殖利率）
+    assert df2["dividend_yield"].iloc[0] == 3.80
+    assert df2["pb_ratio"].iloc[0] == 2.90
+    assert df2["date"].iloc[0] == pd.Timestamp("2016-07-15")
+    assert parse_bwibbu_json({"stat": "很抱歉"}, "2330").empty
+
+
+def test_valuation_merge_no_lookahead(cfg, ohlcv):
+    """估值併入鎖定：同日左併、缺日 NaN 不前向填充；截斷未來估值
+    不改變歷史列（防前視）。"""
+    from src.features.feature_matrix import build_feature_matrix
+    from src.fetch.twse_bwibbu import add_valuation_features
+    p2 = Phase2Config()
+    feats = build_feature_matrix(ohlcv, cfg, p2)
+    dates = pd.to_datetime(feats["date"])
+    val = pd.DataFrame({
+        "stock_id": "T", "date": dates,
+        "dividend_yield": 2.0, "pe_ratio": 15.0, "pb_ratio": 2.5})
+    val_missing = val.iloc[:-10]                          # 末10日無估值
+    out = add_valuation_features(feats, val_missing)
+    assert out["pe_ratio"].iloc[-1] != out["pe_ratio"].iloc[-1] or \
+        pd.isna(out["pe_ratio"].iloc[-1])                # 缺日=NaN 非舊值
+    assert out["pe_ratio"].iloc[0] == 15.0
+    # 截斷檢查：拿掉未來估值不影響歷史列
+    t = len(feats) - 20
+    out_full = add_valuation_features(feats, val)
+    out_trunc = add_valuation_features(feats.iloc[:t], val.iloc[:t])
+    pd.testing.assert_series_equal(
+        out_full["pe_ratio"].iloc[:t].reset_index(drop=True),
+        out_trunc["pe_ratio"].reset_index(drop=True), check_names=False)
+
+
+# ===== v3.15 月營收 + IMTM 鎖定測試 =====
+
+def test_revenue_publication_alignment_no_lookahead(cfg):
+    """月營收發布日對齊鎖定：M 月營收自次月10日起才可用——
+    7/9 只能用 5 月營收、7/10 起才能用 6 月營收（防前視核心）。"""
+    from src.fetch.mops_revenue import revenue_yoy_on_dates
+    rev = {f"{y}{m:02d}": 100.0 * (1.10 ** ((y - 2024) * 12 + m))
+           for y in (2024, 2025, 2026) for m in range(1, 13)}   # 每月+10%
+    dates = pd.Series(pd.to_datetime(["2026-07-09", "2026-07-10"]))
+    yoy = revenue_yoy_on_dates(dates, rev)
+    exp_may = rev["202605"] / rev["202505"] - 1
+    exp_jun = rev["202606"] / rev["202506"] - 1
+    assert abs(yoy.iloc[0] - exp_may) < 1e-9              # 7/9 → 5月
+    assert abs(yoy.iloc[1] - exp_jun) < 1e-9              # 7/10 → 6月
+    # 基期缺 → NaN 不猜
+    assert pd.isna(revenue_yoy_on_dates(
+        pd.Series(pd.to_datetime(["2026-07-10"])), {"202606": 100.0}).iloc[0])
+
+
+def test_revenue_html_parser_field_driven(cfg):
+    """月報解析鎖定：欄名驅動（公司代號/當月營收）、千分位、
+    非數字代號列剔除、去年同月欄不誤抓。"""
+    from src.fetch.mops_revenue import parse_revenue_html
+    html = """<table><tr><th>公司代號</th><th>公司名稱</th>
+    <th>當月營收</th><th>去年當月營收</th></tr>
+    <tr><td>2330</td><td>台積電</td><td>1,234,567</td><td>999</td></tr>
+    <tr><td>合計</td><td>-</td><td>9,999</td><td>1</td></tr></table>"""
+    df = parse_revenue_html(html)
+    assert len(df) == 1 and df["stock_id"].iloc[0] == "2330"
+    assert df["revenue"].iloc[0] == 1234567.0             # 當月非去年欄
+    assert parse_revenue_html("<html>no table</html>").empty
+
+
+def test_imtm_peer_mean_excludes_self(cfg):
+    """IMTM 鎖定：同業均值排除自身；單獨產業 → NaN。"""
+    from src.features.imtm import add_peer_momentum
+    days = pd.bdate_range("2024-01-01", periods=40)
+    def _mk(mult):
+        px = 100.0 * (mult ** pd.Series(range(40)))
+        return pd.DataFrame({"date": days, "close": px.values,
+                             "open": px.values, "high": px.values,
+                             "low": px.values, "volume": 1000})
+    frames = {"A": _mk(1.01), "B": _mk(1.02), "C": _mk(1.005)}
+    imap = {"A": "半導體", "B": "半導體", "C": "金融"}
+    out = add_peer_momentum(frames, imap)
+    a5 = out["A"]["imtm_5d_peer"].iloc[-1]
+    b_own = frames["B"]["close"].pct_change(5).iloc[-1]
+    assert abs(a5 - b_own) < 1e-9                          # A的同業=只有B
+    assert pd.isna(out["C"]["imtm_5d_peer"].iloc[-1])      # 單獨產業→NaN
+
+
+def test_revenue_csv_parser_cp950_field_driven(cfg):
+    """v3.15.1 鎖定：官方CSV（cp950）解析——實際表頭「營業收入-當月營收」
+    命中、「去年當月營收」不誤抓、千分位、非數字代號剔除。"""
+    from src.fetch.mops_revenue import parse_revenue_csv
+    csv_text = ("出表日期,公司代號,公司名稱,產業別,營業收入-當月營收,"
+                "營業收入-上月營收,營業收入-去年當月營收\n"
+                "115/07/10,2330,台積電,半導體,\"1,234,567\",\"1,111,111\",999\n"
+                "115/07/10,合計,—,—,9999,1,1\n")
+    df = parse_revenue_csv(csv_text.encode("cp950"))
+    assert len(df) == 1 and df["stock_id"].iloc[0] == "2330"
+    assert df["revenue"].iloc[0] == 1234567.0
+    assert parse_revenue_csv(b"garbage\x00\xff").empty
+
+
+def test_revenue_html_header_with_br_space(cfg):
+    """L44 鎖定：表頭被 <br> 切開（攤平後帶空白「公司 代號」）仍須命中。"""
+    from src.fetch.mops_revenue import parse_revenue_html
+    html = """<table><tr><th>公司<br>代號</th><th>名稱</th>
+    <th>當月<br>營收</th></tr>
+    <tr><td>2317</td><td>鴻海</td><td>555,000</td></tr></table>"""
+    df = parse_revenue_html(html)
+    assert len(df) == 1 and df["revenue"].iloc[0] == 555000.0
+
+
+def test_custom_saver_isolation_and_no_future_cols(cfg, ohlcv, tmp_path):
+    """v3.16 收官鎖定：自選股儲存走同一特徵引擎、產物隔離於指定目錄、
+    特徵檔剔除未來報酬欄；空資料誠實回報不存檔。"""
+    from src.custom.fetch_and_save import save_custom_stock, load_watchlist
+    r = save_custom_stock("9999", cfg, Phase2Config(), tmp_path / "c",
+                          fetch_fn=lambda s, a, b, c: ohlcv.assign(stock_id=s))
+    assert r["ok"] and r["rows"] == len(ohlcv)
+    f = pd.read_csv(tmp_path / "c" / "9999_features.csv")
+    assert not any(c in f.columns for c in
+                   ("fwd_return_gross", "fwd_return_net", "label_up"))
+    assert (tmp_path / "c" / "9999_ohlcv.csv").exists()
+    # 空資料 → ok=False 不落檔
+    r2 = save_custom_stock("8888", cfg, Phase2Config(), tmp_path / "c2",
+                           fetch_fn=lambda s, a, b, c: ohlcv.iloc[0:0])
+    assert not r2["ok"] and not (tmp_path / "c2").exists()
+    # 凍結清單解析：註解行/非數字剔除
+    w = tmp_path / "w.csv"
+    w.write_text("# 註解\nstock_id,note,added_date\n6669,,2026-07-19\nabc,,\n",
+                 encoding="utf-8")
+    assert load_watchlist(w) == ["6669"]

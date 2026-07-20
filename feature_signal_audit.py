@@ -169,6 +169,10 @@ def audit_categorical_mw(sub: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return df.sort_values("p_raw").reset_index(drop=True)
 
 
+FUND_COLS = ["pe_ratio", "pb_ratio", "dividend_yield"]   # P2 估值三欄
+REV_COLS_F = ["rev_yoy"]                                  # P2 月營收YoY
+from src.features.imtm import IMTM_COLS                   # P2 池內同業動能
+
 V2_FEATURE_COLS = [
     "ret_5d_excess", "ret_20d_excess",
     "rsi_14_rank", "mv_bias_rank", "ret_5d_rank", "ret_20d_rank",
@@ -276,6 +280,13 @@ def main() -> int:
                     help="第四優先：依 TWSE 官方產業分類分組重跑診斷")
     ap.add_argument("--industry-csv", type=Path, default=Path("industry_map.csv"),
                     help="官方分類不可用時的人工對照 CSV")
+    ap.add_argument("--revenue", action="store_true",
+                    help="P2：加入官方月營收 YoY（MOPS，發布日對齊）")
+    ap.add_argument("--imtm", action="store_true",
+                    help="P2：加入池內同業動能 IMTM（官方產業分類）")
+    ap.add_argument("--fundamentals", action="store_true",
+                    help="P2：加入官方估值特徵（本益比/殖利率/股價淨值比，"
+                         "BWIBBU）一併稽核")
     ap.add_argument("--extra-symbols", type=str, default="",
                     help="逗號分隔之額外股票代號（方案A：擴充池特徵稽核，"
                          "僅用開發集、不碰 holdout、不重訓模型）")
@@ -297,9 +308,39 @@ def main() -> int:
               f"（僅開發集診斷，不碰 holdout、不重訓）")
     frames = {sid: fetch_stock_history(sid, start, end, p1)
               for sid in all_ids}
+    rev_map = None
+    if args.revenue:
+        from src.fetch.mops_revenue import build_revenue_map
+        print("月營收：抓取 MOPS 全市場月報（首次約 3–5 分鐘，之後快取）…")
+        rev_map = build_revenue_map(list(frames.keys()), start, end, p1)
+    imtm_map = None
+    if args.imtm:
+        from src.features.imtm import add_peer_momentum
+        try:
+            from src.fetch.industry_map import resolve_industry_map
+            imap, src_ = resolve_industry_map(sorted(frames.keys()),
+                                              args.industry_csv)
+            print(f"IMTM：池內同業動能（分類來源：{src_}）")
+            imtm_map = add_peer_momentum(frames, imap)
+        except Exception as exc:                          # noqa: BLE001
+            print(f"  [IMTM] 產業分類不可用，跳過：{exc}")
     parts = []
     for sid, df in frames.items():
         f = build_feature_matrix(df, p1, p2)
+        if rev_map is not None:
+            from src.fetch.mops_revenue import revenue_yoy_on_dates
+            f["rev_yoy"] = revenue_yoy_on_dates(
+                f["date"], rev_map.get(sid, {})).values
+        if imtm_map is not None:
+            im = imtm_map[sid].copy()
+            im["date"] = pd.to_datetime(im["date"])
+            f["date"] = pd.to_datetime(f["date"])
+            f = f.merge(im, on="date", how="left")
+        if args.fundamentals:
+            from src.fetch.twse_bwibbu import (add_valuation_features,
+                                               fetch_valuation_history)
+            val = fetch_valuation_history(sid, start, end, p1)
+            f = add_valuation_features(f, val)
         if args.v2:
             from src.features.feature_matrix import add_volatility_features
             vol = add_volatility_features(df)
@@ -340,10 +381,19 @@ def main() -> int:
     print("── 診斷A：point-biserial（獨立子樣本，Holm 校正）──")
     if args.v2:
         audit_cols = audit_cols + V2_FEATURE_COLS
+    if args.fundamentals:
+        audit_cols = audit_cols + FUND_COLS
+    if args.revenue:
+        audit_cols = audit_cols + REV_COLS_F
+    if args.imtm:
+        audit_cols = audit_cols + IMTM_COLS
     a = audit_point_biserial(sub, audit_cols)
     print(a.to_string(index=False))
     print("\n── 診斷B：逐日橫斷面 IC（每隔 N 日取樣，Holm 校正）──")
-    numeric_cols = NUMERIC_AUDIT_COLS + (V2_FEATURE_COLS if args.v2 else [])
+    numeric_cols = NUMERIC_AUDIT_COLS + (V2_FEATURE_COLS if args.v2 else []) \
+        + (FUND_COLS if args.fundamentals else []) \
+        + (REV_COLS_F if args.revenue else []) \
+        + (IMTM_COLS if args.imtm else [])
     b = audit_daily_ic(dev, numeric_cols, p2.forward_return_days)
     print(b.to_string(index=False))
 

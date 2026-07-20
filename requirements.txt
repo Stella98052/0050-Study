@@ -12,3 +12,5 @@ matplotlib>=3.8        # 本機實測 3.10.8
 streamlit>=1.40        # 本機實測 1.59.2
 plotly>=5.20           # 本機實測 6.9.0
 scipy>=1.13            # 本機實測 1.18.0
+lxml>=4.9              # MOPS 月營收 HTML 解析（pd.read_html 首選）
+html5lib>=1.1          # pd.read_html 備援解析器

@@ -27,6 +27,7 @@ from src.dashboard.predictions_log import (prospective_progress,
                                            latest_prediction_per_stock)
 from src.dashboard.export import to_csv_bytes, coverage_caption
 from src.dashboard.stock_names import format_choice, load_names_from_holdings
+from src.dashboard.tidal import DIR_TEXT, TIDAL_DISCLAIMER, tidal_state
 from src.dashboard.watchlist import parse_watch_param, serialize_watch
 from src.dashboard.vg_status import load_vg_status, vg6_blocking
 from bootstrap_cloud import cloud_readiness, READINESS_GUIDE
@@ -122,6 +123,26 @@ def _view(stock_id: str, cache_key: str):
     return load_stock_view(stock_id, P1, P2, P3)
 
 
+def _render_tidal_snapshot(fl):
+    """潮汐快照一列（前十大與自選股共用，v3.14 P1）。"""
+    sd = int(fl.get("mv_short_direction", 0))
+    md = int(fl.get("mv_mid_direction", 0))
+    veto = bool(fl.get("mv_mid_veto_active", False))
+    stt = tidal_state(sd, md, veto)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("5MV 方向", DIR_TEXT.get(sd, "—"))
+    c2.metric("13MV 方向", DIR_TEXT.get(md, "—"))
+    c3.metric("潮汐狀態", f"{stt['emoji']} {stt['label']}",
+              help=stt["desc"])
+    _b = fl.get("mv_bias")
+    burst = bool(fl.get("is_volume_burst", False))
+    c4.metric("量能乖離率", (f"{_b:.1%}" + ("🔥爆發" if burst else ""))
+              if pd.notna(_b) else "—")
+    if stt["emoji"] == "🔴":
+        st.error("⚠ " + stt["desc"] + "（凌駕任何模型/波浪判讀）")
+    st.caption(TIDAL_DISCLAIMER)
+
+
 if sid:
     try:
         view = _view(sid, pd.Timestamp.today().strftime("%Y-%m-%d"))
@@ -168,16 +189,8 @@ if sid:
         st.info("此為自選股，不在模型訓練範圍（模型僅以 0050 前十大訓練），"
                 "故不提供模型預測；以下技術快照為官方資料即時計算，有效。")
         fl = view["features"].tail(1).iloc[0]
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("realtime 波浪", str(fl["wave_label_realtime"]))
-        _veto = bool(fl.get("mv_mid_veto_active", False))
-        t2.metric("13MV 核心否決線", "⚠ 下彎(否決)" if _veto else "未觸發")
-        _dir = {1: "↑ 上揚", -1: "↓ 下彎", 0: "→ 持平"}
-        t3.metric("5MV 方向", _dir.get(int(fl.get("mv_short_direction", 0)), "—"))
-        _bias = fl.get("mv_bias")
-        t4.metric("量能乖離率", f"{_bias:.1%}" if pd.notna(_bias) else "—")
-        if _veto:
-            st.error("⚠ 13MV 下彎＝方法論絕對否決訊號，凌駕任何波浪判讀。")
+        st.metric("realtime 波浪", str(fl["wave_label_realtime"]))
+        _render_tidal_snapshot(fl)
         model = None
     else:
         blocked, msg = vg6_blocking(P3.report_json)
@@ -207,6 +220,8 @@ if sid:
                          "凌駕任何模型/波浪判讀。")
             st.caption(f"模型：{pred['model_tag']}｜特徵基準日 {pred['as_of']}"
                        f"｜{P3.disclaimer_short}")
+            st.markdown("**潮汐快照**")
+            _render_tidal_snapshot(feats_last)
 
     # ── VG 驗證狀態小卡（全模型層級，對每檔股票相同）──
     st.subheader("驗證關卡狀態（全模型層級，非單股）")
