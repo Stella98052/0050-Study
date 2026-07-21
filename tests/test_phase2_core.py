@@ -1113,3 +1113,31 @@ def test_company_names_parser_field_driven(cfg):
     assert m["6669"] == "緯穎"
     assert m["2891"].startswith("中國信託")
     assert "合計" not in m and parse_company_names([]) == {}
+
+
+def test_prospective_eval_maturity_and_hit(cfg):
+    """v3.21 前瞻檢驗鎖定：到期判定（不足N根不評）、命中定義、
+    淨報酬含成本、預宣告裁決文字（<30 不下結論）。"""
+    from src.dashboard.prospective_eval import (evaluate_from_frames,
+                                                summarize_accuracy)
+    days = pd.bdate_range("2026-06-01", periods=20)
+    px = pd.DataFrame({"date": days,
+                       "close": [100 + i for i in range(20)],  # 日漲1元
+                       "open": 100, "high": 100, "low": 100, "volume": 1000})
+    pred = pd.DataFrame([
+        {"stock_id": "2330", "last_bar_date": days[5], "proba_up": 0.6,
+         "pick": True},                                    # 到期：漲→命中
+        {"stock_id": "2330", "last_bar_date": days[8], "proba_up": 0.4,
+         "pick": False},                                   # 到期：漲→未命中
+        {"stock_id": "2330", "last_bar_date": days[18], "proba_up": 0.7,
+         "pick": True},                                    # 未到期
+    ])
+    ev = evaluate_from_frames(pred, {"2330": px}, cost_total=0.005925,
+                              forward_days=5)
+    assert ev["matured"].tolist() == [True, True, False]
+    exp_net = 110 / 105 - 1 - 0.005925                     # 第1筆
+    assert abs(ev["realized_net"].iloc[0] - exp_net) < 1e-9
+    assert ev["hit"].iloc[0] == True and ev["hit"].iloc[1] == False  # noqa: E712
+    sm = summarize_accuracy(ev, n_days=5)
+    assert sm["n_matured"] == 2 and sm["hit_rate"] == 0.5
+    assert "不得下結論" in sm["verdict"]                    # <30 預宣告

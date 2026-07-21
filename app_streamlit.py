@@ -336,6 +336,45 @@ if sid:
             st.plotly_chart(fig, width='stretch')
             st.caption("此圖為模型每日輸出的機率軌跡；VG-6 現況下模型無判別力，"
                        "僅供前瞻管線演示，達 30 獨立樣本後才做最終裁決。")
+
         elif sid:
             st.caption(f"{format_choice(sid, names)} 目前僅 {len(hist)} 筆紀錄，"
                        "累積 2 筆以上才顯示趨勢圖。")
+
+        # ── 📐 預測準確度檢驗（前瞻，v3.21；與 7/30 裁決同一工具）──
+        with st.expander("📐 預測準確度檢驗（前瞻已到期樣本）"):
+            from src.dashboard.prospective_eval import (evaluate_from_frames,
+                                                        summarize_accuracy)
+            _cost = P1.fee_buy_rate + P1.fee_sell_rate + P1.tax_sell_rate
+            _pred_all = load_predictions_view(P3.predictions_csv)
+            _pred_top = _pred_all[_pred_all["stock_id"].isin(holding_ids)]
+            _frames = {s: _view(s, pd.Timestamp.today().strftime("%Y-%m-%d")
+                                )["ohlcv"] for s in
+                       _pred_top["stock_id"].unique()}
+            _ev = evaluate_from_frames(_pred_top, _frames, _cost,
+                                       P2.forward_return_days)
+            _sm = summarize_accuracy(_ev, P2.forward_return_days)
+            st.markdown(f"**裁決狀態**：{_sm['verdict']}")
+            if _sm["n_matured"] > 0:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("已到期樣本", _sm["n_matured"])
+                c2.metric("命中率", f"{_sm['hit_rate']:.1%}")
+                c3.metric("二項檢定 p", f"{_sm['p_binom']:.3f}")
+                _mt = _ev[_ev["matured"] == True].copy()   # noqa: E712
+                _mt["last_bar_date"] = _mt["last_bar_date"].dt.strftime(
+                    "%Y-%m-%d")
+                _mt["realized_net"] = (_mt["realized_net"] * 100
+                                       ).round(2).astype(str) + "%"
+                _mt["proba_up"] = (_mt["proba_up"] * 100
+                                   ).round(1).astype(str) + "%"
+                _mt["stock_id"] = _mt["stock_id"].map(
+                    lambda x: format_choice(x, names))
+                show_ev = _mt[["stock_id", "last_bar_date", "proba_up",
+                               "pick", "realized_net", "hit"]]
+                show_ev.columns = ["代碼", "預測日", "P(漲)", "模型看多",
+                                   "實際淨報酬", "命中"]
+                st.dataframe(show_ev, hide_index=True)
+            st.caption("命中定義：模型方向（P>50%＝看多）與實際 5 日淨報酬"
+                       "正負一致；淨報酬＝毛報酬−總成本率（一階近似）。"
+                       "凍結預測不重算；此檢驗即 Model v1 最終裁決之工具。")
+
