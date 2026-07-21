@@ -1141,3 +1141,24 @@ def test_prospective_eval_maturity_and_hit(cfg):
     sm = summarize_accuracy(ev, n_days=5)
     assert sm["n_matured"] == 2 and sm["hit_rate"] == 0.5
     assert "不得下結論" in sm["verdict"]                    # <30 預宣告
+
+
+def test_custom_snapshot_build_append_dedup(cfg, ohlcv, tmp_path):
+    """v3.22 自選股快照鎖定：快照列由特徵末列生成（含潮汐狀態）、
+    同（代號,資料日）去重、讀取排序。"""
+    from src.dashboard.custom_snapshots import (append_snapshot,
+                                                build_snapshot_row,
+                                                load_snapshots)
+    from src.features.feature_matrix import build_feature_matrix
+    feats = build_feature_matrix(ohlcv, cfg, Phase2Config())
+    row = build_snapshot_row("3008", ohlcv.sort_values("date").iloc[-1],
+                             feats.tail(1).iloc[0], "2026-07-22T20:00")
+    assert row["stock_id"] == "3008" and row["tidal"][0] in "🟢🟡🔴⚪"
+    p = tmp_path / "snap.csv"
+    assert append_snapshot(row, p) is True
+    assert append_snapshot(row, p) is False               # 同日去重
+    row2 = dict(row, last_bar_date="2026-07-23")
+    assert append_snapshot(row2, p) is True
+    df = load_snapshots(p, "3008")
+    assert len(df) == 2 and df["last_bar_date"].is_monotonic_increasing
+    assert load_snapshots(tmp_path / "none.csv").empty

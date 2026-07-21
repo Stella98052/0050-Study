@@ -322,7 +322,33 @@ if sid:
         show.columns = ["代碼", "資料日", "收盤", "P(漲)", "方向"]
         st.dataframe(show, hide_index=True)
         # 選定股票的預測歷史趨勢
-        hist = load_predictions_view(P3.predictions_csv, sid)
+        _sid_custom = sid not in in_model_universe
+        if _sid_custom:
+            # 自選股：顯示每日技術快照歷史（模型紀錄不適用，v3.22）
+            from src.dashboard.custom_snapshots import load_snapshots
+            snaps = load_snapshots(Path("data/custom_snapshots.csv"), sid)
+            st.markdown(f"**{_label(sid)} 每日技術快照紀錄**"
+                        "（方法論檢核值，不含模型數字）")
+            if len(snaps) == 0:
+                st.info("尚無快照紀錄。每日排程會對 repo 內 "
+                        "custom_watchlist.csv 清單的股票自動累積技術快照——"
+                        "把此代號寫入該檔並 push，明天起自動累積；"
+                        "面板臨時加入的自選股不在排程範圍。")
+            else:
+                _sh = snaps.copy()
+                _sh["last_bar_date"] = _sh["last_bar_date"].dt.strftime(
+                    "%Y-%m-%d")
+                _sh["bias"] = (_sh["bias"] * 100).round(1).astype(str) + "%"
+                _sh = _sh[["last_bar_date", "close", "tidal", "bias",
+                           "wave"]]
+                _sh.columns = ["資料日", "收盤", "潮汐狀態", "量能乖離",
+                               "波浪"]
+                st.dataframe(_sh.tail(30), hide_index=True)
+                st.caption("由每日排程自動累積（同日去重）；"
+                           "完整歷史在 repo 的 data/custom_snapshots.csv。")
+        hist = (load_predictions_view(P3.predictions_csv, sid)
+                if not _sid_custom else
+                load_predictions_view(P3.predictions_csv, "__none__"))
         if len(hist) >= 2:
             import plotly.graph_objects as _go
             fig = _go.Figure(_go.Scatter(
@@ -337,7 +363,7 @@ if sid:
             st.caption("此圖為模型每日輸出的機率軌跡；VG-6 現況下模型無判別力，"
                        "僅供前瞻管線演示，達 30 獨立樣本後才做最終裁決。")
 
-        elif sid:
+        elif sid and not _sid_custom:
             st.caption(f"{format_choice(sid, names)} 目前僅 {len(hist)} 筆紀錄，"
                        "累積 2 筆以上才顯示趨勢圖。")
 

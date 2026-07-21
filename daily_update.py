@@ -98,6 +98,41 @@ def main() -> int:
           f"預先宣告規則）")
     print("提醒：預測有效性受 VG-6 現況約束（見面板狀態卡），"
           "目前模型判別力=無，紀錄僅為前瞻協定累積。")
+
+    # ── 自選股每日技術快照（v3.22：讀 repo 凍結清單，累積方法論檢核值）──
+    try:
+        from pathlib import Path as _P
+        from src.custom.fetch_and_save import load_watchlist
+        from src.dashboard.custom_snapshots import (append_snapshot,
+                                                    build_snapshot_row)
+        wl = load_watchlist(_P("custom_watchlist.csv"))
+        if wl:
+            from src.features.feature_matrix import build_feature_matrix
+            snap_path = _P("data/custom_snapshots.csv")
+            run_ts = pd.Timestamp.now().isoformat(timespec="seconds")
+            n_new = 0
+            print(f"\n自選股快照（{len(wl)} 檔，不含模型數字）：")
+            for csid in wl:
+                try:
+                    cdf = fetch_stock_history(csid, start, end, p1)
+                    if len(cdf) == 0:
+                        print(f"  ✗ {csid}：查無官方日K（上櫃/興櫃不支援）")
+                        continue
+                    cf = build_feature_matrix(
+                        cdf.sort_values("date").reset_index(drop=True), p1, p2)
+                    row = build_snapshot_row(
+                        csid, cdf.sort_values("date").iloc[-1],
+                        cf.tail(1).iloc[0], run_ts)
+                    ok = append_snapshot(row, snap_path)
+                    n_new += int(ok)
+                    print(f"  {'✓' if ok else '＝'} {csid}：{row['last_bar_date']}"
+                          f" 收 {row['close']} {row['tidal']}"
+                          f"{'' if ok else '（當日已有紀錄，略過）'}")
+                except Exception as _exc:                  # noqa: BLE001
+                    print(f"  ✗ {csid}：{type(_exc).__name__}: {_exc}")
+            print(f"自選股快照新增 {n_new} 筆 → data/custom_snapshots.csv")
+    except Exception as _exc:                              # noqa: BLE001
+        print(f"⚠ 自選股快照段失敗（不影響前十大流程）：{_exc}")
     return 0
 
 

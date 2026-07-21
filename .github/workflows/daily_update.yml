@@ -43,7 +43,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # 只 add 需要的產物，絕不 add __pycache__/pyc（避免污染 repo）
-          git add -f data/predictions.csv data/models data/reports 2>/dev/null || true
+          git add -f data/predictions.csv data/custom_snapshots.csv data/models data/reports 2>/dev/null || true
           git add -f data/raw 2>/dev/null || true
           git reset -q -- '**/__pycache__' '**/*.pyc' 2>/dev/null || true
           if git diff --staged --quiet; then
