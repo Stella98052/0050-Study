@@ -4,7 +4,9 @@ name: 前瞻更新監督（watchdog）
 # 本 workflow 亦受 GitHub 排程延遲影響，但當晚任何時間補查皆有效
 on:
   schedule:
-    - cron: "10 13 * * 1-5"
+    # 台北 22:10（UTC 14:10）——在兩班實際落地時間（20:00–21:00）之後；
+    # 判定為資料驅動（比對 TWSE 最新交易日），不看日曆今日
+    - cron: "10 14 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
@@ -21,27 +23,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: 檢查今日前瞻紀錄是否存在
+      - name: 檢查前瞻紀錄是否落後官方交易日
         id: check
-        run: |
-          python - << 'PY'
-          import csv, datetime, os, pathlib
-          today = datetime.date.today()  # runner UTC；台北 21:10 = UTC 13:10 同日
-          p = pathlib.Path("data/predictions.csv")
-          stale = True
-          latest = "（無檔案）"
-          if p.exists():
-              with p.open(encoding="utf-8") as f:
-                  dates = [r.get("last_bar_date", "") for r in csv.DictReader(f)]
-              dates = [d for d in dates if d]
-              if dates:
-                  latest = max(dates)
-                  stale = latest < today.isoformat()
-          print(f"最新紀錄日={latest}｜今日={today}｜stale={stale}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as g:
-              g.write(f"stale={'true' if stale else 'false'}\n")
-              g.write(f"latest={latest}\n")
-          PY
+        run: python scripts/watchdog_check.py
+
       - name: 補觸發每日更新
         if: steps.check.outputs.stale == 'true'
         env:
@@ -56,4 +41,4 @@ jobs:
         run: |
           gh issue create \
             --title "⏰ 每日前瞻更新未如期執行 $(date -u +%Y-%m-%d)" \
-            --body "watchdog 檢查：predictions.csv 最新紀錄日=${{ steps.check.outputs.latest }}，非今日。已自動補觸發 daily_update（GitHub 排程延遲為平台特性）。**若今日為台股休市日，此通知可忽略關閉。**請稍後確認 Actions 補跑結果。"
+            --body "watchdog（資料驅動）：predictions 最新資料日=${{ steps.check.outputs.pred_latest }}，官方最新交易日=${{ steps.check.outputs.twse_latest }} → 落後，已自動補觸發 daily_update。判定以官方實際交易日為準，休市/連假不會誤報；若仍反覆出現，多為官方當日資料發布時間晚於排程，請檢視 daily_update 執行紀錄。"

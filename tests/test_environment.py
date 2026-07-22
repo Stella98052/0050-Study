@@ -88,3 +88,26 @@ def test_workflow_git_add_single_pathspec():
             if len(args) > 1:
                 bad.append(s)
     assert not bad, f"git add 多路徑（易靜默失敗）：{bad}"
+
+
+def test_watchdog_data_driven_logic():
+    """v3.23 鎖定：watchdog 判定以官方交易日為基準（休市不誤報）、
+    TWSE 不可達回 None 不誤觸發、民國日期雙格式解析。"""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "wd", Path("scripts/watchdog_check.py"))
+    wd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wd)
+
+    assert wd.roc_to_iso("115/07/22") == "2026-07-22"
+    assert wd.roc_to_iso("115年07月22日") == "2026-07-22"
+    payload = {"stat": "OK", "data": [["115/07/21", "1"], ["115/07/22", "2"]]}
+    assert wd.parse_stock_day_dates(payload)[-1] == "2026-07-22"
+    assert wd.parse_stock_day_dates({"stat": "很抱歉"}) == []
+    # 落後→補跑；同步→不動；休市日（官方最新仍是昨日）→不誤報
+    assert wd.decide_stale("2026-07-21", "2026-07-22") is True
+    assert wd.decide_stale("2026-07-22", "2026-07-22") is False
+    assert wd.decide_stale("2026-07-21", "2026-07-21") is False
+    assert wd.decide_stale(None, "2026-07-22") is True
+    assert wd.decide_stale("2026-07-21", None) is None      # 官方不可達
