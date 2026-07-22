@@ -43,8 +43,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # 只 add 需要的產物，絕不 add __pycache__/pyc（避免污染 repo）
-          git add -f data/predictions.csv data/custom_snapshots.csv data/models data/reports 2>/dev/null || true
-          git add -f data/raw 2>/dev/null || true
+          # L54：git add 多路徑時只要一個不存在即整條 fatal、什麼都不 stage
+          # （曾造成 workflow 全綠但資料從未推回）。故逐檔存在才 add。
+          for f in data/predictions.csv data/custom_snapshots.csv; do
+            if [ -f "$f" ]; then git add -f "$f"; else echo "略過（不存在）：$f"; fi
+          done
+          for d in data/models data/reports data/raw; do
+            if [ -d "$d" ]; then git add -f "$d"; else echo "略過（不存在）：$d"; fi
+          done
+          echo "--- 已 stage 檔案 ---"
+          git diff --staged --name-only | head -20
           git reset -q -- '**/__pycache__' '**/*.pyc' 2>/dev/null || true
           if git diff --staged --quiet; then
             echo "無變更，略過 commit"

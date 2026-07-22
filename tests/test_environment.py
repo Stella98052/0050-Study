@@ -69,3 +69,22 @@ def test_lightgbm_sklearn_interface_available():
         "缺 scikit-learn：LightGBM 的 LGBMClassifier（sklearn 介面）將無法使用"
     import lightgbm as lgb
     assert hasattr(lgb, "LGBMClassifier"), "lightgbm.sklearn 介面不可用"
+
+
+def test_workflow_git_add_single_pathspec():
+    """L54 回歸鎖定：workflow 的 git add -f 每行只帶單一路徑。
+
+    git add 多路徑時，只要任一 pathspec 不存在即 fatal 且『什麼都不 stage』，
+    配合 `|| true` 會造成 workflow 全綠但產物從未 commit（靜默資料斷更）。
+    """
+    from pathlib import Path
+    wf = Path(".github/workflows/daily_update.yml").read_text(encoding="utf-8")
+    bad = []
+    for line in wf.splitlines():
+        s = line.strip()
+        if s.startswith("git add -f "):
+            args = [a for a in s[len("git add -f "):].split()
+                    if not a.startswith("2>") and a not in ("||", "true")]
+            if len(args) > 1:
+                bad.append(s)
+    assert not bad, f"git add 多路徑（易靜默失敗）：{bad}"
