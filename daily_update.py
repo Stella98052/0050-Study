@@ -56,8 +56,16 @@ def main() -> int:
 
     model, bundle = load_model_pack(p3.model_path)
     if model is None:
-        print(f"⚠ 模型包不存在（{p3.model_path}）——僅更新資料與 VG-1，"
-              f"不輸出預測。先跑 run_phase2.py 產生模型包。")
+        # L56：無模型＝當日一列預測都不會寫，導致 workflow 全綠卻無資料。
+        # 此為致命狀態，必須明確失敗而非靜默略過。
+        print(f"[中止] 模型包不存在（{p3.model_path.resolve()}）——"
+              f"本次不會產生任何前瞻紀錄。")
+        print("  診斷：data/models/*.joblib 受 .gitignore 排除，需由 "
+              "workflow 的「若無模型包則先建置」步驟產生；"
+              "該步驟失敗時請檢視其 log（run_phase2.py 輸出）。")
+        print(f"  現存 data/models 內容："
+              f"{sorted(p.name for p in Path('data/models').glob('*')) if Path('data/models').exists() else '（目錄不存在）'}")
+        return 2
 
     rows = []
     for sid, df in frames.items():

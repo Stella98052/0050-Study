@@ -37,10 +37,16 @@ jobs:
       - name: 若無模型包則先建置
         run: |
           if [ ! -f data/models/model_phase2-v1.joblib ]; then
-            python run_phase2.py --holdings holdings.csv --skip-vg2 || echo "建置非零退出，續行"
+            python run_phase2.py --holdings holdings.csv --skip-vg2
+          fi
+          echo "--- data/models 內容 ---"
+          ls -la data/models 2>/dev/null || echo "（data/models 不存在）"
+          if [ ! -f data/models/model_phase2-v1.joblib ]; then
+            echo "::error::模型包建置後仍不存在——daily_update 將無法產生預測"
+            exit 1
           fi
       - name: 執行每日更新
-        run: python daily_update.py --holdings holdings.csv || echo "更新非零退出，續行 commit"
+        run: python daily_update.py --holdings holdings.csv
       - name: Commit 前瞻紀錄與模型/快取（排除暫存）
         run: |
           git config user.name "github-actions[bot]"
