@@ -115,7 +115,9 @@ def main() -> int:
                                                     build_snapshot_row)
         wl = load_watchlist(_P("custom_watchlist.csv"))
         if wl:
-            from src.features.feature_matrix import build_feature_matrix
+            # 註：build_feature_matrix 已於模組層級 import，
+            # 此處不得再 import（函式內 import 會使該名稱在整個 main()
+            # 變成區域變數，導致前段引用 UnboundLocalError——L57）
             snap_path = _P("data/custom_snapshots.csv")
             run_ts = pd.Timestamp.now().isoformat(timespec="seconds")
             n_new = 0

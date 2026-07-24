@@ -84,3 +84,80 @@ def test_gitignore_and_force_add_consistency():
                or item in line for line in gi.splitlines()):
             assert f'git add -f "$f"' in t or f'git add -f "$d"' in t, \
                 f"{item} 受 gitignore 排除但 workflow 未強制加入"
+
+
+@pytest.mark.parametrize("pyfile", ["daily_update.py", "feature_signal_audit.py",
+                                    "run_phase2.py", "fetch_custom.py"])
+def test_no_function_local_import_shadowing_module_level(pyfile):
+    """L57：函式內 import 若與模組層級同名，會使該名稱在整個函式成為
+    區域變數，導致較早的引用 UnboundLocalError——且 py_compile 驗不出。
+
+    此測試曾攔下的實例：daily_update.main() 內重複 import
+    build_feature_matrix，造成每日更新崩潰、資料靜默斷更 3 天。
+    """
+    import ast
+    p = Path(pyfile)
+    if not p.exists():
+        pytest.skip(f"{pyfile} 不存在")
+    tree = ast.parse(p.read_text(encoding="utf-8"))
+    module_names = {
+        (a.asname or a.name).split(".")[0]
+        for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
+        for a in n.names}
+    offenders = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for n in ast.walk(fn):
+            if isinstance(n, (ast.Import, ast.ImportFrom)):
+                for a in n.names:
+                    nm = (a.asname or a.name).split(".")[0]
+                    if nm in module_names:
+                        offenders.append(f"{pyfile}:{n.lineno} {fn.name}() "
+                                         f"重複 import {nm}")
+    assert not offenders, "函式內 import 遮蔽模組層級名稱：" + "; ".join(offenders)
+
+
+def test_daily_update_writes_predictions_end_to_end(tmp_path, monkeypatch):
+    """端到端：注入假抓取器與假模型，驗證 main() 真的寫出預測列。
+
+    這是對「全綠卻無資料」最直接的守門——只要控制流有任何中斷
+    （例外、提早 return、寫檔失敗），本測試即失敗。
+    """
+    import sys
+    import numpy as np
+    import pandas as pd
+    sys.path.insert(0, ".")
+    import daily_update as du
+
+    days = pd.bdate_range("2024-01-01", periods=300)
+
+    def fake_fetch(sid, s, e, cfg, session=None):
+        px = 100 + np.cumsum(np.random.RandomState(7).randn(len(days)))
+        return pd.DataFrame({"stock_id": sid, "date": days, "open": px,
+                             "high": px + 1, "low": px - 1, "close": px,
+                             "volume": 1000 + np.arange(len(days))})
+
+    monkeypatch.setattr(du, "fetch_stock_history", fake_fetch)
+    monkeypatch.setattr(du, "load_model_pack", lambda p: (object(), {}))
+    monkeypatch.setattr(du, "predict_latest", lambda m, b, f: {
+        "proba_up": 0.55, "pick": True, "model_tag": "test",
+        "as_of": str(pd.to_datetime(f["date"].iloc[-1]).date())})
+
+    h = tmp_path / "h.csv"
+    h.write_text("stock_id,weight\n2330,1.0\n", encoding="utf-8")
+    out = tmp_path / "pred.csv"
+
+    # Phase3Config 為 dataclass：需在建構後改實例屬性（改 class 無效）
+    _orig_p3 = du.Phase3Config
+
+    def _p3_with_tmp(*a, **k):
+        cfg = _orig_p3(*a, **k)
+        object.__setattr__(cfg, "predictions_csv", out)
+        return cfg
+
+    monkeypatch.setattr(du, "Phase3Config", _p3_with_tmp)
+    monkeypatch.setattr(sys, "argv", ["daily_update.py", "--holdings", str(h)])
+
+    code = du.main()
+    assert code == 0, f"main() 非零退出（{code}）＝當日不會有任何預測"
+    assert out.exists(), "predictions 未寫出（靜默斷更的典型症狀）"
+    assert len(out.read_text(encoding="utf-8").strip().splitlines()) >= 2
