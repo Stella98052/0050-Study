@@ -160,7 +160,48 @@ def _view(stock_id: str, cache_key: str):
     return load_stock_view(stock_id, P1, P2, P3)
 
 
-def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False):
+@st.cache_data(ttl=3600, show_spinner=False)
+def _compute_score_for(sid: str, _fl_dict: dict):
+    """單股簡易評分（籌碼近 20 日、估值近三年；快取一小時）。"""
+    from datetime import date, timedelta
+    from src.fetch.twse_bwibbu import fetch_valuation_history
+    from src.fetch.twse_chips import fetch_chips_recent
+    from src.score.simple_score import compute_simple_score
+    end = date.today()
+    try:
+        chips = fetch_chips_recent([sid], end, 30, P1)
+        chips = chips[chips["stock_id"] == sid].sort_values("date")
+    except Exception:                                      # noqa: BLE001
+        chips = pd.DataFrame()
+    try:
+        val = fetch_valuation_history(sid, end - timedelta(days=1095), end, P1)
+    except Exception:                                      # noqa: BLE001
+        val = pd.DataFrame()
+    view = _view(sid, pd.Timestamp.today().strftime("%Y-%m-%d"))
+    vol = view["ohlcv"].sort_values("date")["volume"].tail(30)
+    # 營收動能：特徵矩陣不含 rev_yoy（僅稽核腳本才加），故此處實抓 MOPS
+    # 官方月報並套用發布日對齊（M 月營收次月 10 日起可用）
+    try:
+        from src.fetch.mops_revenue import revenue_yoy_latest
+        rev, _rev_note = revenue_yoy_latest(sid, end, P1)
+    except Exception:                                      # noqa: BLE001
+        rev = None
+    return compute_simple_score(
+        rev_yoy=rev,
+        pe=(float(val["pe_ratio"].dropna().iloc[-1])
+            if len(val) and val["pe_ratio"].notna().any() else None),
+        pe_hist=(val["pe_ratio"] if len(val) else None),
+        inst_net=(chips["inst_net"] if "inst_net" in chips else None),
+        volume=vol,
+        margin_bal=(chips["margin_bal"] if "margin_bal" in chips else None),
+        short_bal=(chips["short_bal"] if "short_bal" in chips else None),
+        mv_short_dir=int(_fl_dict.get("mv_short_direction", 0)),
+        mv_mid_dir=int(_fl_dict.get("mv_mid_direction", 0)),
+        veto=bool(_fl_dict.get("mv_mid_veto_active", False)))
+
+
+def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False,
+                           _itp_sid="x"):
     """潮汐快照+解讀結論（前十大與自選股共用；v3.14 P1、v3.19 解讀）。"""
     sd = int(fl.get("mv_short_direction", 0))
     md = int(fl.get("mv_mid_direction", 0))
@@ -179,6 +220,42 @@ def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False):
         st.error("⚠ " + stt["desc"] + "（凌駕任何模型/波浪判讀）")
     st.caption(TIDAL_DISCLAIMER)
     # ── 解讀結論（v3.19：規則驅動，零猜想）──
+    # ── 簡易評分（v3.25：基本面＋籌碼面透明加權，按鈕觸發）──
+    with st.expander("🧮 簡易評分（基本面＋籌碼面）"):
+        st.caption("五分項透明加權：營收動能25／估值位階20／法人動能30／"
+                   "籌碼結構15／量價動能10。缺項權重重分配，不填預設值。"
+                   "**決策輔助檢核分數，非經統計驗證之預測器。**")
+        if st.button("計算評分（抓取近 20 日籌碼，約 15–40 秒）",
+                     key=f"score_btn_{_itp_sid}"):
+            with st.spinner("抓取官方籌碼與估值資料中…"):
+                st.session_state[f"score_{_itp_sid}"] = _compute_score_for(
+                    _itp_sid, {k: fl.get(k) for k in
+                               ("rev_yoy", "mv_short_direction",
+                                "mv_mid_direction", "mv_mid_veto_active")})
+        _res = st.session_state.get(f"score_{_itp_sid}")
+        if _res:
+            if _res.get("score") is None:
+                st.warning("無足夠官方資料可評分。")
+            else:
+                st.metric("綜合評分", f"{_res['score']} / 100",
+                          help=f"採用 {_res['n_available']}/5 分項")
+                if _res.get("capped_by_13mv"):
+                    st.error("⚠ 13MV 下彎：方法論鐵律，總分強制封頂 20")
+                for _k, _lab in (("revenue", "營收動能"),
+                                 ("valuation", "估值位階"),
+                                 ("institution", "法人動能"),
+                                 ("margin", "籌碼結構"),
+                                 ("tide", "量價動能")):
+                    _d = _res["detail"][_k]
+                    _v = _d["value"]
+                    st.markdown(
+                        f"- **{_lab}**："
+                        + (f"{_v:.2f}" if _v is not None else "—")
+                        + f"　<span style='color:gray;font-size:0.85em'>"
+                          f"{_d['calc_logic']}</span>",
+                        unsafe_allow_html=True)
+                st.caption(_res["disclaimer"])
+
     itp = interpret_card(
         proba=_itp_proba, mv_short_dir=sd, mv_mid_dir=md, veto=veto,
         bias=(float(_b) if pd.notna(_b) else None), burst=burst,
@@ -239,7 +316,7 @@ if sid:
                 "故不提供模型預測；以下技術快照為官方資料即時計算，有效。")
         fl = view["features"].tail(1).iloc[0]
         st.metric("realtime 波浪", str(fl["wave_label_realtime"]))
-        _render_tidal_snapshot(fl, _itp_custom=True)
+        _render_tidal_snapshot(fl, _itp_custom=True, _itp_sid=sid)
         model = None
     else:
         blocked, msg = vg6_blocking(P3.report_json)
@@ -270,7 +347,8 @@ if sid:
             st.caption(f"模型：{pred['model_tag']}｜特徵基準日 {pred['as_of']}"
                        f"｜{P3.disclaimer_short}")
             st.markdown("**潮汐快照**")
-            _render_tidal_snapshot(feats_last, _itp_proba=pred["proba_up"])
+            _render_tidal_snapshot(feats_last, _itp_proba=pred["proba_up"],
+                                   _itp_sid=sid)
 
     # ── VG 驗證狀態小卡（全模型層級，對每檔股票相同）──
     st.subheader("驗證關卡狀態（全模型層級，非單股）")

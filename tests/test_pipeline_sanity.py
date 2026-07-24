@@ -86,34 +86,53 @@ def test_gitignore_and_force_add_consistency():
                 f"{item} 受 gitignore 排除但 workflow 未強制加入"
 
 
-@pytest.mark.parametrize("pyfile", ["daily_update.py", "feature_signal_audit.py",
-                                    "run_phase2.py", "fetch_custom.py"])
-def test_no_function_local_import_shadowing_module_level(pyfile):
-    """L57：函式內 import 若與模組層級同名，會使該名稱在整個函式成為
-    區域變數，導致較早的引用 UnboundLocalError——且 py_compile 驗不出。
+def test_no_use_before_local_import_anywhere():
+    """L57 強化：掃描全部原始碼，找出「函式內 import 遮蔽模組層級名稱，
+    且該名稱在 import 之前就被使用」——這才是真正的 UnboundLocalError。
 
-    此測試曾攔下的實例：daily_update.main() 內重複 import
-    build_feature_matrix，造成每日更新崩潰、資料靜默斷更 3 天。
+    採精確判定而非粗篩：import 若在使用點之前，執行上安全，不誤報。
+    曾攔下的實例：daily_update.main() 重複 import build_feature_matrix，
+    造成每日更新崩潰、資料靜默斷更三天。
     """
     import ast
-    p = Path(pyfile)
-    if not p.exists():
-        pytest.skip(f"{pyfile} 不存在")
-    tree = ast.parse(p.read_text(encoding="utf-8"))
-    module_names = {
-        (a.asname or a.name).split(".")[0]
-        for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
-        for a in n.names}
     offenders = []
-    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
-        for n in ast.walk(fn):
-            if isinstance(n, (ast.Import, ast.ImportFrom)):
-                for a in n.names:
-                    nm = (a.asname or a.name).split(".")[0]
-                    if nm in module_names:
-                        offenders.append(f"{pyfile}:{n.lineno} {fn.name}() "
-                                         f"重複 import {nm}")
-    assert not offenders, "函式內 import 遮蔽模組層級名稱：" + "; ".join(offenders)
+    for p in sorted(Path(".").rglob("*.py")):
+        if "__pycache__" in str(p):
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            offenders.append(f"{p}: SyntaxError {exc}")
+            continue
+        module_names = {
+            (a.asname or a.name).split(".")[0]
+            for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
+            for a in n.names}
+        for fn in [n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef)]:
+            local_imports = {}
+            for n in ast.walk(fn):
+                if isinstance(n, (ast.Import, ast.ImportFrom)):
+                    for a in n.names:
+                        nm = (a.asname or a.name).split(".")[0]
+                        if nm in module_names:
+                            local_imports.setdefault(nm, n.lineno)
+            for nm, imp_line in local_imports.items():
+                used_before = [
+                    n.lineno for n in ast.walk(fn)
+                    if isinstance(n, ast.Name) and n.id == nm
+                    and isinstance(n.ctx, ast.Load) and n.lineno < imp_line]
+                used_before += [
+                    n.value.lineno for n in ast.walk(fn)
+                    if isinstance(n, ast.Attribute)
+                    and isinstance(n.value, ast.Name) and n.value.id == nm
+                    and n.value.lineno < imp_line]
+                if used_before:
+                    offenders.append(
+                        f"{p}:{fn.name}() {nm} 於第 {min(used_before)} 行使用，"
+                        f"第 {imp_line} 行才 import")
+    assert not offenders, "使用早於函式內 import（UnboundLocalError）：" + \
+        "; ".join(offenders)
 
 
 def test_daily_update_writes_predictions_end_to_end(tmp_path, monkeypatch):

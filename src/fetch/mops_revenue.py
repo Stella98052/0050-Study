@@ -192,3 +192,31 @@ def revenue_yoy_on_dates(dates: pd.Series,
         out.append(cur / base - 1.0
                    if cur is not None and base not in (None, 0) else float("nan"))
     return pd.Series(out, index=dates.index, dtype="float64")
+
+
+def revenue_yoy_latest(stock_id: str, asof: date, cfg,
+                       session=None) -> tuple[float | None, str]:
+    """最新可用月營收 YoY——僅抓 2 個月報檔（面板即時用，避免 40 秒等待）。
+
+    發布日對齊同 revenue_yoy_on_dates：asof.day>=10 → 可用前一月，
+    否則前二月。若該月檔尚未產生（月初），自動再往前一個月。
+    回傳 (yoy 或 None, 說明字串)。
+    """
+    ym0 = f"{asof.year}{asof.month:02d}"
+    lag = 1 if asof.day >= 10 else 2
+    for extra in (0, 1):                                   # 最多退一個月
+        m = _prev_ym(ym0, lag + extra)
+        base = _prev_ym(m, 12)
+        cur_tbl = fetch_revenue_month(m, cfg, session)
+        if len(cur_tbl) == 0:
+            continue
+        base_tbl = fetch_revenue_month(base, cfg, session)
+        if len(base_tbl) == 0:
+            return None, f"{base} 基期月報無資料"
+        cur = cur_tbl[cur_tbl["stock_id"] == str(stock_id)]["revenue"]
+        bas = base_tbl[base_tbl["stock_id"] == str(stock_id)]["revenue"]
+        if len(cur) == 0 or len(bas) == 0 or float(bas.iloc[0]) == 0:
+            return None, f"{stock_id} 於 {m}/{base} 無營收列"
+        yoy = float(cur.iloc[0]) / float(bas.iloc[0]) - 1.0
+        return yoy, f"{m} 營收 YoY（基期 {base}）"
+    return None, "最近月報尚未發布"
