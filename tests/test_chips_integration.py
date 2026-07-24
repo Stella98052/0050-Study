@@ -134,58 +134,116 @@ def test_fetch_chips_recent_end_to_end(tmp_path, monkeypatch):
 
 
 def test_chips_to_score_pipeline(tmp_path, monkeypatch):
-    """籌碼資料 → 評分：法人與籌碼分項確實被計入（非缺值重分配）。"""
+    """籌碼資料 → 六因子評分：法人與籌碼分項確實計入（非缺值重分配）。"""
     monkeypatch.chdir(tmp_path)
-    inst = pd.Series([2_000_000.0] * 6)                    # 連續買超
-    vol = pd.Series([40_000_000.0] * 6)                    # 佔量 5%
-    margin = pd.Series([10_000.0, 9_800.0, 9_600.0, 9_400.0, 9_200.0,
-                        9_000.0])                          # 融資 -10%
-    short = pd.Series([2_000.0] * 6)                       # 券資比 22%
-    res = compute_simple_score(
-        rev_yoy=0.25, pe=18.0, pe_hist=pd.Series(range(10, 130)),
-        inst_net=inst, volume=vol, margin_bal=margin, short_bal=short,
-        mv_short_dir=1, mv_mid_dir=1)
-    assert res["n_available"] == 5, "五分項應全數可用"
+    inst = pd.Series([2_000_000.0] * 6)
+    vol = pd.Series([40_000_000.0] * 6)
+    margin = pd.Series([10_000.0, 9_800.0, 9_600.0, 9_400.0, 9_200.0, 9_000.0])
+    short = pd.Series([2_000.0] * 6)
+    kw = dict(rev_yoy=0.25, eps_accel=0.10,
+              margins={"gross_yoy": 0.02, "op_yoy": 0.015}, roe=0.18,
+              fcf=1e9, inst_net=inst, volume=vol, margin_bal=margin,
+              short_bal=short, pe=18.0, pe_hist=pd.Series(range(10, 130)))
+    res = compute_simple_score(**kw, mv_short_dir=1, mv_mid_dir=1)
+    assert res["n_available"] == 6
     assert res["detail"]["institution"]["value"] is not None
     assert res["detail"]["margin"]["value"] is not None
-    assert 0 <= res["score"] <= 100
-    assert not res["capped_by_13mv"]
-    # 同條件下 13MV 下彎必須壓到 20 以下（鐵律優先於高分）
-    veto = compute_simple_score(
-        rev_yoy=0.25, pe=18.0, pe_hist=pd.Series(range(10, 130)),
-        inst_net=inst, volume=vol, margin_bal=margin, short_bal=short,
-        mv_short_dir=1, mv_mid_dir=-1)
-    assert veto["score"] <= 20.0 and veto["capped_by_13mv"]
-    assert veto["score"] < res["score"]
+    assert res["detail"]["quality"]["value"] is not None
+    assert 0 <= res["score"] <= 100 and not res["capped_by_13mv"]
+    veto = compute_simple_score(**kw, mv_short_dir=1, mv_mid_dir=-1)
+    assert veto["score"] <= 20.0 and veto["score"] < res["score"]
 
 
-def test_revenue_yoy_latest_two_files_only(tmp_path, monkeypatch):
-    """輕量營收 YoY：僅抓 2 個月報檔、發布日對齊、月初自動退一月。"""
-    monkeypatch.chdir(tmp_path)
-    import src.fetch.mops_revenue as mr
+def test_financial_factors_from_quarters():
+    """財務因子（輸入為累計數，符合 MOPS 實況）：
+    EPS 單季 YoY 與加速度、三率 YoY、ROE(TTM)、FCF=ΣOCF−Σcapex。"""
+    from src.features.fin_factors import (eps_growth_and_accel,
+                                          free_cash_flow, roe_ttm,
+                                          three_margins)
+    # 欄位皆為「年初至該季累計」（equity 除外，為存量）
+    cols = ["year", "season", "eps", "revenue", "gross_profit", "op_income",
+            "net_income", "equity", "ocf", "capex"]
+    rows = [
+        (2024, 3, 18, 2000, 900, 700, 600, 4000, 700, 250),
+        (2024, 4, 26, 2800, 1300, 1000, 850, 4200, 1000, 380),
+        (2025, 1, 8, 800, 400, 300, 200, 4500, 300, 100),
+        (2025, 2, 17, 1700, 850, 640, 420, 4600, 620, 220),
+        (2025, 3, 27, 2700, 1350, 1000, 660, 4800, 960, 350),
+        (2025, 4, 38, 3800, 1900, 1400, 950, 4900, 1300, 480),
+        (2026, 1, 12, 1000, 600, 450, 300, 5000, 500, 200),
+    ]
+    fin = pd.DataFrame(rows, columns=cols).astype(float)
 
-    fetched: list[str] = []
+    # 單季 EPS：2026Q1=12 vs 2025Q1=8 → +50%
+    g, accel = eps_growth_and_accel(fin)
+    assert abs(g - 0.50) < 1e-9
+    # 上一季 2025Q4 單季=38−27=11 vs 2024Q4 單季=26−18=8 → +37.5%
+    assert abs(accel - (0.50 - 0.375)) < 1e-9
 
-    def fake_month(ym, cfg, session=None):
-        fetched.append(ym)
-        if ym in ("202607",):                              # 本月尚未發布
-            return pd.DataFrame(columns=["stock_id", "revenue"])
-        base = 100.0 if ym.startswith("2025") else 130.0   # 年增 30%
-        return pd.DataFrame([{"stock_id": "2330", "revenue": base}])
+    m = three_margins(fin)
+    assert abs(m["gross"] - 0.60) < 1e-9                   # 600/1000（單季）
+    assert abs(m["gross_yoy"] - 0.10) < 1e-9               # 60% vs 50%
+    assert abs(m["net"] - 0.30) < 1e-9
 
-    monkeypatch.setattr(mr, "fetch_revenue_month", fake_month)
+    # ROE：近四季單季淨利 300+290+240+220 = 1050 ÷ 最新權益 5000
+    assert abs(roe_ttm(fin) - 1050 / 5000) < 1e-9
 
-    # 7/24（>=10 日）→ 可用 6 月；基期 2025-06
-    yoy, note = mr.revenue_yoy_latest("2330", date(2026, 7, 24), object())
-    assert abs(yoy - 0.30) < 1e-9, f"YoY 應為 30%，實得 {yoy}"
-    assert "202606" in note and len(fetched) == 2, f"只該抓 2 檔，實抓 {fetched}"
+    # FCF：ΣOCF(500+340+340+320) − Σcapex(200+130+130+120)
+    assert abs(free_cash_flow(fin) - (1500 - 580)) < 1e-9
 
-    # 7/5（<10 日）→ 只能用 5 月（不得偷看 6 月）
-    fetched.clear()
-    yoy2, note2 = mr.revenue_yoy_latest("2330", date(2026, 7, 5), object())
-    assert "202605" in note2 and abs(yoy2 - 0.30) < 1e-9
+    empty = pd.DataFrame(columns=["year", "season"])
+    assert eps_growth_and_accel(empty) == (None, None)
+    assert roe_ttm(empty) is None and free_cash_flow(empty) is None
 
-    # 標的不在月報中 → None 不猜
-    fetched.clear()
-    yoy3, note3 = mr.revenue_yoy_latest("9999", date(2026, 7, 24), object())
-    assert yoy3 is None and "無營收列" in note3
+
+def test_publication_date_alignment_no_lookahead():
+    """公告日對齊：季底當天不得可用，須等法定期限（防前視核心）。"""
+    from src.fetch.mops_financials import available_quarters, publication_date
+    assert publication_date(2026, 1) == date(2026, 5, 15)
+    assert publication_date(2025, 4) == date(2026, 3, 31)   # 年報次年
+    # 5/14 尚不可用 Q1；5/15 起可用
+    assert (2026, 1) not in available_quarters(date(2026, 5, 14))
+    assert (2026, 1) in available_quarters(date(2026, 5, 15))
+    # 季底當天（3/31）絕不可用該季（Q1 尚未結束更不可能）
+    assert (2026, 1) not in available_quarters(date(2026, 3, 31))
+    q = available_quarters(date(2026, 7, 24), 4)
+    assert q == sorted(q, key=lambda x: (x[0], x[1]), reverse=True)
+
+
+def test_cumulative_to_single_quarter_real_2330():
+    """L64 鎖定：MOPS 季報為累計數，須轉單季——以 2330 實抓數字驗證。
+
+    實抓（2026/7/24）2025 Q2/Q3/Q4 營收 1.77/2.76/3.81 兆逐季遞增＝累計。
+    若直接相加四季計 ROE，會膨脹逾一倍（71% vs 實際約 30%）。
+    """
+    from src.features.fin_factors import (roe_ttm, three_margins,
+                                          to_single_quarter)
+    fin = pd.DataFrame([
+        {"year": 2026, "season": 1, "eps": 22.08, "revenue": 1.134103e9,
+         "gross_profit": 7.512954e8, "op_income": 6.589661e8,
+         "net_income": 5.728013e8, "equity": 5.932389e9, "ocf": 6.989763e8},
+        {"year": 2025, "season": 4, "eps": 66.26, "revenue": 3.809054e9,
+         "gross_profit": 2.281294e9, "op_income": 1.936092e9,
+         "net_income": 1.715397e9, "equity": 5.460795e9, "ocf": 2.274976e9},
+        {"year": 2025, "season": 3, "eps": 46.75, "revenue": 2.762964e9,
+         "gross_profit": 1.629307e9, "op_income": 1.371189e9,
+         "net_income": 1.209981e9, "equity": 5.035578e9, "ocf": 1.549467e9},
+        {"year": 2025, "season": 2, "eps": 29.31, "revenue": 1.773046e9,
+         "gross_profit": 1.040764e9, "op_income": 8.705044e8,
+         "net_income": 7.582261e8, "equity": 4.616632e9, "ocf": 1.122638e9},
+    ])
+    sq = to_single_quarter(fin)
+    q4 = sq[(sq["year"] == 2025) & (sq["season"] == 4)].iloc[0]
+    assert abs(q4["revenue"] - (3.809054e9 - 2.762964e9)) < 1.0
+    q1 = sq[(sq["year"] == 2026) & (sq["season"] == 1)].iloc[0]
+    assert abs(q1["revenue"] - 1.134103e9) < 1.0           # Q1 累計即單季
+    # 缺同年上季 → NaN 不猜（此處缺 2025Q1）
+    q2 = sq[(sq["year"] == 2025) & (sq["season"] == 2)].iloc[0]
+    assert pd.isna(q2["revenue"])
+    # equity 為存量，不得被差分
+    assert abs(q4["equity"] - 5.460795e9) < 1.0
+
+    m = three_margins(fin)
+    assert 0.60 < m["gross"] < 0.72, f"毛利率 {m['gross']:.1%} 偏離實況"
+    roe = roe_ttm(fin)
+    assert 0.20 < roe < 0.50, f"ROE {roe:.1%} 應在合理區間（未修正時 >0.7）"

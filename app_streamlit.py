@@ -186,8 +186,23 @@ def _compute_score_for(sid: str, _fl_dict: dict):
         rev, _rev_note = revenue_yoy_latest(sid, end, P1)
     except Exception:                                      # noqa: BLE001
         rev = None
+    # 季報財務因子（EPS加速度/三率/ROE/FCF），公告日對齊防前視
+    eps_accel = margins = roe = fcf = None
+    try:
+        from src.features.fin_factors import (eps_growth_and_accel,
+                                              free_cash_flow, roe_ttm,
+                                              three_margins)
+        from src.fetch.mops_financials import fetch_financials
+        fin = fetch_financials(sid, end, P1, n_quarters=6)
+        if len(fin):
+            _g, eps_accel = eps_growth_and_accel(fin)
+            margins = three_margins(fin)
+            roe = roe_ttm(fin)
+            fcf = free_cash_flow(fin)
+    except Exception:                                      # noqa: BLE001
+        pass
     return compute_simple_score(
-        rev_yoy=rev,
+        rev_yoy=rev, eps_accel=eps_accel, margins=margins, roe=roe, fcf=fcf,
         pe=(float(val["pe_ratio"].dropna().iloc[-1])
             if len(val) and val["pe_ratio"].notna().any() else None),
         pe_hist=(val["pe_ratio"] if len(val) else None),
@@ -222,8 +237,10 @@ def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False,
     # ── 解讀結論（v3.19：規則驅動，零猜想）──
     # ── 簡易評分（v3.25：基本面＋籌碼面透明加權，按鈕觸發）──
     with st.expander("🧮 簡易評分（基本面＋籌碼面）"):
-        st.caption("五分項透明加權：營收動能25／估值位階20／法人動能30／"
-                   "籌碼結構15／量價動能10。缺項權重重分配，不填預設值。"
+        st.caption("六因子透明加權，權重採聖杯（費波那契 13:8:5:3:2:1，"
+                   "相鄰比≈0.618）比例：成長動能 40.6／獲利品質 25.0／"
+                   "法人動能 15.6／籌碼結構 9.4／量價動能 6.3／估值位階 3.1。"
+                   "缺項權重重分配、不填預設值；13MV 下彎總分封頂 20。"
                    "**決策輔助檢核分數，非經統計驗證之預測器。**")
         if st.button("計算評分（抓取近 20 日籌碼，約 15–40 秒）",
                      key=f"score_btn_{_itp_sid}"):
@@ -241,21 +258,33 @@ def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False,
                           help=f"採用 {_res['n_available']}/5 分項")
                 if _res.get("capped_by_13mv"):
                     st.error("⚠ 13MV 下彎：方法論鐵律，總分強制封頂 20")
-                for _k, _lab in (("revenue", "營收動能"),
-                                 ("valuation", "估值位階"),
-                                 ("institution", "法人動能"),
-                                 ("margin", "籌碼結構"),
-                                 ("tide", "量價動能")):
-                    _d = _res["detail"][_k]
+                from config.score_config import FACTOR_ORDER
+                for _k in FACTOR_ORDER:
+                    _d = _res["detail"].get(_k)
+                    if not _d:
+                        continue
                     _v = _d["value"]
                     st.markdown(
-                        f"- **{_lab}**："
-                        + (f"{_v:.2f}" if _v is not None else "—")
+                        f"- **{_d['label']}**（權重 {_d['weight']:.1f}%）："
+                        + (f"**{_v:.2f}**" if _v is not None else "—")
                         + f"　<span style='color:gray;font-size:0.85em'>"
                           f"{_d['calc_logic']}</span>",
                         unsafe_allow_html=True)
                 st.caption(_res["disclaimer"])
 
+
+
+
+def _render_interpretation(fl, _itp_proba=None, _itp_custom=False):
+    """解讀結論（總結段）：規則驅動，零自由生成。
+
+    所有輸入自 fl 重新計算，不依賴其他函式的區域變數（避免耦合）。
+    """
+    sd = int(fl.get("mv_short_direction", 0))
+    md = int(fl.get("mv_mid_direction", 0))
+    veto = bool(fl.get("mv_mid_veto_active", False))
+    _b = fl.get("mv_bias")
+    burst = bool(fl.get("is_volume_burst", False))
     itp = interpret_card(
         proba=_itp_proba, mv_short_dir=sd, mv_mid_dir=md, veto=veto,
         bias=(float(_b) if pd.notna(_b) else None), burst=burst,
@@ -268,7 +297,6 @@ def _render_tidal_snapshot(fl, _itp_proba=None, _itp_custom=False,
         st.markdown(f"**行動語意**：{itp['action']}")
         st.caption(itp["disclaimer"])
 
-
 if sid:
     try:
         view = _view(sid, pd.Timestamp.today().strftime("%Y-%m-%d"))
@@ -279,6 +307,7 @@ if sid:
         st.stop()
     tail = view["ohlcv_tail"]
     lookback_start = pd.to_datetime(tail["date"].iloc[0])
+    pred = None                      # 明確初始化（總結段跨分頁引用）
 
     # ── 主圖 + 副圖 ──
     is_custom = sid not in in_model_universe
@@ -286,199 +315,212 @@ if sid:
         st.warning(f"⚠ {format_choice(sid, names)} 為自選股，不在 0050 前十大"
                    "模型訓練範圍內：以下 K線／波浪／MV 潮汐等技術圖照官方資料"
                    "計算有效；但模型預測卡不適用此股（模型未見過它），將隱藏。")
-    st.subheader(f"{_label(sid)}｜末根K {view['last_bar_date']}"
-                 f"｜收盤 {view['last_close']}")
-    st.caption(coverage_caption(view["ohlcv"]))
-    dl1, dl2, _sp = st.columns([1, 1, 2])
-    dl1.download_button(
-        "⬇ 下載K線 CSV", to_csv_bytes(view["ohlcv"]),
-        file_name=f"{sid}_ohlcv.csv", mime="text/csv",
-        help="十年官方日K（開高低收量），Excel 可直接開啟")
-    _feat_export = view["features"].drop(
-        columns=[c for c in ("fwd_return_gross", "fwd_return_net", "label_up")
-                 if c in view["features"].columns])
-    dl2.download_button(
-        "⬇ 下載特徵 CSV", to_csv_bytes(_feat_export),
-        file_name=f"{sid}_features.csv", mime="text/csv",
-        help="技術特徵全表（MV潮汐/RSI/MACD/波浪標籤等，不含未來報酬欄）")
-    st.plotly_chart(make_candles_figure(tail, view["pivots_retro"],
-                                        view["pivots_rt"], lookback_start),
-                    width='stretch')
-    st.caption("轉折點：灰=retrospective（回溯視角，僅供視覺參考，禁入模型）"
-               "／藍=realtime（僅用已確認轉折，可用於決策層）")
-    st.plotly_chart(make_mv_figure(tail, view["mv"], lookback_start, P1),
-                    width='stretch')
 
-    # ── 預測卡（自選股不適用；VG-6 蓋過警語優先）──
-    st.subheader("模型預測卡")
-    if is_custom:
-        st.info("此為自選股，不在模型訓練範圍（模型僅以 0050 前十大訓練），"
-                "故不提供模型預測；以下技術快照為官方資料即時計算，有效。")
-        fl = view["features"].tail(1).iloc[0]
-        st.metric("realtime 波浪", str(fl["wave_label_realtime"]))
-        _render_tidal_snapshot(fl, _itp_custom=True, _itp_sid=sid)
-        model = None
-    else:
-        blocked, msg = vg6_blocking(P3.report_json)
-        if blocked:
-            st.error("🛑 " + msg)
-        model, bundle = load_model_pack(P3.model_path)
-        if model is None:
-            st.info("模型包不存在——先執行 run_phase2.py 產生。")
-    if (not is_custom) and model is not None:
-        try:
-            pred = predict_latest(model, bundle, view["features"])
-        except Exception as exc:                       # 特徵欄不符等，明確呈現
-            st.error(f"模型套用失敗（不靜默）：{exc}")
-            pred = None
-        if pred:
-            st.markdown(f"**本股即時值**（隨 {format_choice(sid, names)} 變動）")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("方向", "看多" if pred["pick"] else "看空/觀望")
-            c2.metric("P(未來{}日淨報酬>0)".format(P2.forward_return_days),
-                      f"{pred['proba_up']:.1%}")
-            feats_last = view["features"].tail(1).iloc[0]
-            c3.metric("realtime 波浪", str(feats_last["wave_label_realtime"]))
-            veto = bool(feats_last.get("mv_mid_veto_active", False))
-            c4.metric("13MV 核心否決線", "⚠ 下彎(否決)" if veto else "未觸發")
-            if veto:
-                st.error("⚠ 波浪警示：13MV 下彎＝方法論絕對否決訊號，"
-                         "凌駕任何模型/波浪判讀。")
-            st.caption(f"模型：{pred['model_tag']}｜特徵基準日 {pred['as_of']}"
-                       f"｜{P3.disclaimer_short}")
-            st.markdown("**潮汐快照**")
-            _render_tidal_snapshot(feats_last, _itp_proba=pred["proba_up"],
-                                   _itp_sid=sid)
+    # ── 三段結構（v3.27）：過去／今日／總結對未來預測 ──
+    _tab_past, _tab_today, _tab_next = st.tabs(
+        ["📈 過去（歷史軌跡）", "📍 今日（當前狀態）", "🔮 總結與展望"])
 
-    # ── VG 驗證狀態小卡（全模型層級，對每檔股票相同）──
-    st.subheader("驗證關卡狀態（全模型層級，非單股）")
-    st.caption("這六關檢驗的是「整個模型與規則訊號的統計可信度」，"
-               "十檔以同一模型訓練，故每檔股票顯示相同——這是設計、非錯誤。"
-               "單股即時判讀請看上方預測卡（方向/機率/波浪/13MV 逐股變動）。"
-               "注意：此驗證僅涵蓋 0050 前十大模型；自選股不適用模型，"
-               "本區狀態與自選股無關。")
-    cards = load_vg_status(P3.report_json)
-    cols = st.columns(len(cards))
-    for col, c in zip(cols, cards):
-        icon = "✅" if c["passed"] else ("❌" if c["passed"] is False else "⚠")
-        col.metric(c["gate"], icon)
-        col.caption(c["note"])
-    # 科學結論一句話摘要（讓 ❌ 有脈絡，不被誤讀為「系統壞了」）
-    st.info("科學結論（Phase 2 定案）：VG-3❌＝規則訊號無可證明的優勢；"
-            "VG-6❌＝模型 AUC≈0.5 無判別力。兩者為「誠實的否定結論」，"
-            "系統正確攔下了假訊號，非故障。詳見 PHASE2_CONCLUSION.md。")
+    with _tab_past:
+        st.plotly_chart(make_candles_figure(tail, view["pivots_retro"],
+                                            view["pivots_rt"], lookback_start),
+                        width='stretch')
+        st.caption("轉折點：灰=retrospective（回溯視角，僅供視覺參考，禁入模型）"
+                   "／藍=realtime（僅用已確認轉折，可用於決策層）")
+        st.plotly_chart(make_mv_figure(tail, view["mv"], lookback_start, P1),
+                        width='stretch')
 
-    # ── 前瞻協定進度（Model v2 最終閘）──
-    st.subheader("前瞻驗證進度（Model v2 最終閘）")
-    prog = prospective_progress(P3.predictions_csv, P2.forward_return_days)
-    st.progress(min(1.0, prog["n_independent"] / P3.min_prospective_samples),
-                text=f"獨立樣本 {prog['n_independent']} / "
-                     f"{P3.min_prospective_samples}（紀錄 {prog['n_rows']} 列）")
-    st.caption("每日收盤後由 GitHub Actions 自動執行 daily_update.py 累積；"
-               "達標前不得對 Model v2 下結論（預先宣告規則）。")
+        # ── 每日前瞻紀錄（自動讀取 Actions 累積的 predictions.csv）──
+        st.subheader("每日前瞻紀錄（自動更新）")
+        latest = latest_prediction_per_stock(P3.predictions_csv)
+        if len(latest) == 0:
+            st.info("尚無前瞻紀錄。GitHub Actions「每日前瞻更新」每交易日 22:00 "
+                    "自動累積；也可在 repo 的 Actions 分頁手動 Run workflow 立即產生。")
+        else:
+            _stale = staleness_days(P3.predictions_csv)
+            if _stale is not None and _stale > 4:
+                st.warning(f"⏰ 前瞻紀錄已 {_stale} 天未更新——watchdog 每晚 21:10 "
+                           f"自動檢查並補跑；亦可至 GitHub Actions 手動 Run "
+                           f"「每日前瞻更新」。連假期間屬正常。")
+            st.markdown("**各股最新預測**（每日自動更新，非即時報價）")
+            show = latest[["stock_id", "last_bar_date", "close",
+                           "proba_up", "pick"]].copy()
+            show["stock_id"] = show["stock_id"].map(
+                lambda x: format_choice(x, names))          # v3.12：代碼帶名稱
+            show["last_bar_date"] = show["last_bar_date"].dt.strftime("%Y-%m-%d")
+            show["proba_up"] = (show["proba_up"] * 100).round(1).astype(str) + "%"
+            show["pick"] = show["pick"].map({True: "看多", False: "觀望"})
+            show.columns = ["代碼", "資料日", "收盤", "P(漲)", "方向"]
+            st.dataframe(show, hide_index=True)
+            # 選定股票的預測歷史趨勢
+            _sid_custom = sid not in in_model_universe
+            if _sid_custom:
+                # 自選股：顯示每日技術快照歷史（模型紀錄不適用，v3.22）
+                from src.dashboard.custom_snapshots import load_snapshots
+                snaps = load_snapshots(Path("data/custom_snapshots.csv"), sid)
+                st.markdown(f"**{_label(sid)} 每日技術快照紀錄**"
+                            "（方法論檢核值，不含模型數字）")
+                if len(snaps) == 0:
+                    st.info("尚無快照紀錄。每日排程會對 repo 內 "
+                            "custom_watchlist.csv 清單的股票自動累積技術快照——"
+                            "把此代號寫入該檔並 push，明天起自動累積；"
+                            "面板臨時加入的自選股不在排程範圍。")
+                else:
+                    _sh = snaps.copy()
+                    _sh["last_bar_date"] = _sh["last_bar_date"].dt.strftime(
+                        "%Y-%m-%d")
+                    _sh["bias"] = (_sh["bias"] * 100).round(1).astype(str) + "%"
+                    _sh = _sh[["last_bar_date", "close", "tidal", "bias",
+                               "wave"]]
+                    _sh.columns = ["資料日", "收盤", "潮汐狀態", "量能乖離",
+                                   "波浪"]
+                    st.dataframe(_sh.tail(30), hide_index=True)
+                    st.caption("由每日排程自動累積（同日去重）；"
+                               "完整歷史在 repo 的 data/custom_snapshots.csv。")
+            hist = (load_predictions_view(P3.predictions_csv, sid)
+                    if not _sid_custom else
+                    load_predictions_view(P3.predictions_csv, "__none__"))
+            if len(hist) >= 2:
+                import plotly.graph_objects as _go
+                fig = _go.Figure(_go.Scatter(
+                    x=hist["last_bar_date"], y=hist["proba_up"],
+                    mode="lines+markers", name="P(漲)",
+                    line=dict(color="#1f77b4")))
+                fig.add_hline(y=0.5, line_dash="dot", line_color="#999")
+                fig.update_layout(height=240, margin=dict(l=10, r=10, t=28, b=10),
+                                  yaxis_title="P(未來5日淨報酬>0)",
+                                  title=f"{_label(sid)} 前瞻預測歷史")
+                st.plotly_chart(fig, width='stretch')
+                st.caption("此圖為模型每日輸出的機率軌跡；VG-6 現況下模型無判別力，"
+                           "僅供前瞻管線演示，達 30 獨立樣本後才做最終裁決。")
+            elif sid and not _sid_custom:
+                st.caption(f"{format_choice(sid, names)} 目前僅 {len(hist)} 筆紀錄，"
+                           "累積 2 筆以上才顯示趨勢圖。")
+            # ── 📐 預測準確度檢驗（前瞻，v3.21；與 7/30 裁決同一工具）──
+            with st.expander("📐 預測準確度檢驗（前瞻已到期樣本）"):
+                from src.dashboard.prospective_eval import (evaluate_from_frames,
+                                                            summarize_accuracy)
+                _cost = P1.fee_buy_rate + P1.fee_sell_rate + P1.tax_sell_rate
+                _pred_all = load_predictions_view(P3.predictions_csv)
+                _pred_top = _pred_all[_pred_all["stock_id"].isin(holding_ids)]
+                _frames = {s: _view(s, pd.Timestamp.today().strftime("%Y-%m-%d")
+                                    )["ohlcv"] for s in
+                           _pred_top["stock_id"].unique()}
+                _ev = evaluate_from_frames(_pred_top, _frames, _cost,
+                                           P2.forward_return_days)
+                _sm = summarize_accuracy(_ev, P2.forward_return_days)
+                st.markdown(f"**裁決狀態**：{_sm['verdict']}")
+                if _sm["n_matured"] > 0:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("已到期樣本", _sm["n_matured"])
+                    c2.metric("命中率", f"{_sm['hit_rate']:.1%}")
+                    c3.metric("二項檢定 p", f"{_sm['p_binom']:.3f}")
+                    _mt = _ev[_ev["matured"] == True].copy()   # noqa: E712
+                    _mt["last_bar_date"] = _mt["last_bar_date"].dt.strftime(
+                        "%Y-%m-%d")
+                    _mt["realized_net"] = (_mt["realized_net"] * 100
+                                           ).round(2).astype(str) + "%"
+                    _mt["proba_up"] = (_mt["proba_up"] * 100
+                                       ).round(1).astype(str) + "%"
+                    _mt["stock_id"] = _mt["stock_id"].map(
+                        lambda x: format_choice(x, names))
+                    show_ev = _mt[["stock_id", "last_bar_date", "proba_up",
+                                   "pick", "realized_net", "hit"]]
+                    show_ev.columns = ["代碼", "預測日", "P(漲)", "模型看多",
+                                       "實際淨報酬", "命中"]
+                    st.dataframe(show_ev, hide_index=True)
+                st.caption("命中定義：模型方向（P>50%＝看多）與實際 5 日淨報酬"
+                           "正負一致；淨報酬＝毛報酬−總成本率（一階近似）。"
+                           "凍結預測不重算；此檢驗即 Model v1 最終裁決之工具。")
 
-    # ── 每日前瞻紀錄（自動讀取 Actions 累積的 predictions.csv）──
-    st.subheader("每日前瞻紀錄（自動更新）")
-    latest = latest_prediction_per_stock(P3.predictions_csv)
-    if len(latest) == 0:
-        st.info("尚無前瞻紀錄。GitHub Actions「每日前瞻更新」每交易日 22:00 "
-                "自動累積；也可在 repo 的 Actions 分頁手動 Run workflow 立即產生。")
-    else:
-        _stale = staleness_days(P3.predictions_csv)
-        if _stale is not None and _stale > 4:
-            st.warning(f"⏰ 前瞻紀錄已 {_stale} 天未更新——watchdog 每晚 21:10 "
-                       f"自動檢查並補跑；亦可至 GitHub Actions 手動 Run "
-                       f"「每日前瞻更新」。連假期間屬正常。")
-        st.markdown("**各股最新預測**（每日自動更新，非即時報價）")
-        show = latest[["stock_id", "last_bar_date", "close",
-                       "proba_up", "pick"]].copy()
-        show["stock_id"] = show["stock_id"].map(
-            lambda x: format_choice(x, names))          # v3.12：代碼帶名稱
-        show["last_bar_date"] = show["last_bar_date"].dt.strftime("%Y-%m-%d")
-        show["proba_up"] = (show["proba_up"] * 100).round(1).astype(str) + "%"
-        show["pick"] = show["pick"].map({True: "看多", False: "觀望"})
-        show.columns = ["代碼", "資料日", "收盤", "P(漲)", "方向"]
-        st.dataframe(show, hide_index=True)
-        # 選定股票的預測歷史趨勢
-        _sid_custom = sid not in in_model_universe
-        if _sid_custom:
-            # 自選股：顯示每日技術快照歷史（模型紀錄不適用，v3.22）
-            from src.dashboard.custom_snapshots import load_snapshots
-            snaps = load_snapshots(Path("data/custom_snapshots.csv"), sid)
-            st.markdown(f"**{_label(sid)} 每日技術快照紀錄**"
-                        "（方法論檢核值，不含模型數字）")
-            if len(snaps) == 0:
-                st.info("尚無快照紀錄。每日排程會對 repo 內 "
-                        "custom_watchlist.csv 清單的股票自動累積技術快照——"
-                        "把此代號寫入該檔並 push，明天起自動累積；"
-                        "面板臨時加入的自選股不在排程範圍。")
-            else:
-                _sh = snaps.copy()
-                _sh["last_bar_date"] = _sh["last_bar_date"].dt.strftime(
-                    "%Y-%m-%d")
-                _sh["bias"] = (_sh["bias"] * 100).round(1).astype(str) + "%"
-                _sh = _sh[["last_bar_date", "close", "tidal", "bias",
-                           "wave"]]
-                _sh.columns = ["資料日", "收盤", "潮汐狀態", "量能乖離",
-                               "波浪"]
-                st.dataframe(_sh.tail(30), hide_index=True)
-                st.caption("由每日排程自動累積（同日去重）；"
-                           "完整歷史在 repo 的 data/custom_snapshots.csv。")
-        hist = (load_predictions_view(P3.predictions_csv, sid)
-                if not _sid_custom else
-                load_predictions_view(P3.predictions_csv, "__none__"))
-        if len(hist) >= 2:
-            import plotly.graph_objects as _go
-            fig = _go.Figure(_go.Scatter(
-                x=hist["last_bar_date"], y=hist["proba_up"],
-                mode="lines+markers", name="P(漲)",
-                line=dict(color="#1f77b4")))
-            fig.add_hline(y=0.5, line_dash="dot", line_color="#999")
-            fig.update_layout(height=240, margin=dict(l=10, r=10, t=28, b=10),
-                              yaxis_title="P(未來5日淨報酬>0)",
-                              title=f"{_label(sid)} 前瞻預測歷史")
-            st.plotly_chart(fig, width='stretch')
-            st.caption("此圖為模型每日輸出的機率軌跡；VG-6 現況下模型無判別力，"
-                       "僅供前瞻管線演示，達 30 獨立樣本後才做最終裁決。")
+    with _tab_today:
+        st.subheader(f"{_label(sid)}｜末根K {view['last_bar_date']}"
+                     f"｜收盤 {view['last_close']}")
+        st.caption(coverage_caption(view["ohlcv"]))
+        dl1, dl2, _sp = st.columns([1, 1, 2])
+        dl1.download_button(
+            "⬇ 下載K線 CSV", to_csv_bytes(view["ohlcv"]),
+            file_name=f"{sid}_ohlcv.csv", mime="text/csv",
+            help="十年官方日K（開高低收量），Excel 可直接開啟")
+        _feat_export = view["features"].drop(
+            columns=[c for c in ("fwd_return_gross", "fwd_return_net", "label_up")
+                     if c in view["features"].columns])
+        dl2.download_button(
+            "⬇ 下載特徵 CSV", to_csv_bytes(_feat_export),
+            file_name=f"{sid}_features.csv", mime="text/csv",
+            help="技術特徵全表（MV潮汐/RSI/MACD/波浪標籤等，不含未來報酬欄）")
+        # ── 預測卡（自選股不適用；VG-6 蓋過警語優先）──
+        st.subheader("模型預測卡")
+        if is_custom:
+            st.info("此為自選股，不在模型訓練範圍（模型僅以 0050 前十大訓練），"
+                    "故不提供模型預測；以下技術快照為官方資料即時計算，有效。")
+            fl = view["features"].tail(1).iloc[0]
+            st.metric("realtime 波浪", str(fl["wave_label_realtime"]))
+            _render_tidal_snapshot(fl, _itp_custom=True, _itp_sid=sid)
+            model = None
+        else:
+            blocked, msg = vg6_blocking(P3.report_json)
+            if blocked:
+                st.error("🛑 " + msg)
+            model, bundle = load_model_pack(P3.model_path)
+            if model is None:
+                st.info("模型包不存在——先執行 run_phase2.py 產生。")
+        if (not is_custom) and model is not None:
+            try:
+                pred = predict_latest(model, bundle, view["features"])
+            except Exception as exc:                       # 特徵欄不符等，明確呈現
+                st.error(f"模型套用失敗（不靜默）：{exc}")
+                pred = None
+            if pred:
+                st.markdown(f"**本股即時值**（隨 {format_choice(sid, names)} 變動）")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("方向", "看多" if pred["pick"] else "看空/觀望")
+                c2.metric("P(未來{}日淨報酬>0)".format(P2.forward_return_days),
+                          f"{pred['proba_up']:.1%}")
+                feats_last = view["features"].tail(1).iloc[0]
+                c3.metric("realtime 波浪", str(feats_last["wave_label_realtime"]))
+                veto = bool(feats_last.get("mv_mid_veto_active", False))
+                c4.metric("13MV 核心否決線", "⚠ 下彎(否決)" if veto else "未觸發")
+                if veto:
+                    st.error("⚠ 波浪警示：13MV 下彎＝方法論絕對否決訊號，"
+                             "凌駕任何模型/波浪判讀。")
+                st.caption(f"模型：{pred['model_tag']}｜特徵基準日 {pred['as_of']}"
+                           f"｜{P3.disclaimer_short}")
+                st.markdown("**潮汐快照**")
+                _render_tidal_snapshot(feats_last, _itp_proba=pred["proba_up"],
+                                       _itp_sid=sid)
 
-        elif sid and not _sid_custom:
-            st.caption(f"{format_choice(sid, names)} 目前僅 {len(hist)} 筆紀錄，"
-                       "累積 2 筆以上才顯示趨勢圖。")
 
-        # ── 📐 預測準確度檢驗（前瞻，v3.21；與 7/30 裁決同一工具）──
-        with st.expander("📐 預測準確度檢驗（前瞻已到期樣本）"):
-            from src.dashboard.prospective_eval import (evaluate_from_frames,
-                                                        summarize_accuracy)
-            _cost = P1.fee_buy_rate + P1.fee_sell_rate + P1.tax_sell_rate
-            _pred_all = load_predictions_view(P3.predictions_csv)
-            _pred_top = _pred_all[_pred_all["stock_id"].isin(holding_ids)]
-            _frames = {s: _view(s, pd.Timestamp.today().strftime("%Y-%m-%d")
-                                )["ohlcv"] for s in
-                       _pred_top["stock_id"].unique()}
-            _ev = evaluate_from_frames(_pred_top, _frames, _cost,
-                                       P2.forward_return_days)
-            _sm = summarize_accuracy(_ev, P2.forward_return_days)
-            st.markdown(f"**裁決狀態**：{_sm['verdict']}")
-            if _sm["n_matured"] > 0:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("已到期樣本", _sm["n_matured"])
-                c2.metric("命中率", f"{_sm['hit_rate']:.1%}")
-                c3.metric("二項檢定 p", f"{_sm['p_binom']:.3f}")
-                _mt = _ev[_ev["matured"] == True].copy()   # noqa: E712
-                _mt["last_bar_date"] = _mt["last_bar_date"].dt.strftime(
-                    "%Y-%m-%d")
-                _mt["realized_net"] = (_mt["realized_net"] * 100
-                                       ).round(2).astype(str) + "%"
-                _mt["proba_up"] = (_mt["proba_up"] * 100
-                                   ).round(1).astype(str) + "%"
-                _mt["stock_id"] = _mt["stock_id"].map(
-                    lambda x: format_choice(x, names))
-                show_ev = _mt[["stock_id", "last_bar_date", "proba_up",
-                               "pick", "realized_net", "hit"]]
-                show_ev.columns = ["代碼", "預測日", "P(漲)", "模型看多",
-                                   "實際淨報酬", "命中"]
-                st.dataframe(show_ev, hide_index=True)
-            st.caption("命中定義：模型方向（P>50%＝看多）與實際 5 日淨報酬"
-                       "正負一致；淨報酬＝毛報酬−總成本率（一階近似）。"
-                       "凍結預測不重算；此檢驗即 Model v1 最終裁決之工具。")
+    with _tab_next:
+        _fl_last = view["features"].tail(1).iloc[0]
+        _render_interpretation(
+            _fl_last,
+            _itp_proba=(pred["proba_up"]
+                        if (not is_custom) and pred else None),
+            _itp_custom=is_custom)
+        # ── VG 驗證狀態小卡（全模型層級，對每檔股票相同）──
+        st.subheader("驗證關卡狀態（全模型層級，非單股）")
+        st.caption("這六關檢驗的是「整個模型與規則訊號的統計可信度」，"
+                   "十檔以同一模型訓練，故每檔股票顯示相同——這是設計、非錯誤。"
+                   "單股即時判讀請看上方預測卡（方向/機率/波浪/13MV 逐股變動）。"
+                   "注意：此驗證僅涵蓋 0050 前十大模型；自選股不適用模型，"
+                   "本區狀態與自選股無關。")
+        cards = load_vg_status(P3.report_json)
+        cols = st.columns(len(cards))
+        for col, c in zip(cols, cards):
+            icon = "✅" if c["passed"] else ("❌" if c["passed"] is False else "⚠")
+            col.metric(c["gate"], icon)
+            col.caption(c["note"])
+        # 科學結論一句話摘要（讓 ❌ 有脈絡，不被誤讀為「系統壞了」）
+        st.info("科學結論（Phase 2 定案）：VG-3❌＝規則訊號無可證明的優勢；"
+                "VG-6❌＝模型 AUC≈0.5 無判別力。兩者為「誠實的否定結論」，"
+                "系統正確攔下了假訊號，非故障。詳見 PHASE2_CONCLUSION.md。")
+
+        # ── 前瞻協定進度（Model v2 最終閘）──
+        st.subheader("前瞻驗證進度（Model v2 最終閘）")
+        prog = prospective_progress(P3.predictions_csv, P2.forward_return_days)
+        st.progress(min(1.0, prog["n_independent"] / P3.min_prospective_samples),
+                    text=f"獨立樣本 {prog['n_independent']} / "
+                         f"{P3.min_prospective_samples}（紀錄 {prog['n_rows']} 列）")
+        st.caption("每日收盤後由 GitHub Actions 自動執行 daily_update.py 累積；"
+                   "達標前不得對 Model v2 下結論（預先宣告規則）。")
 
