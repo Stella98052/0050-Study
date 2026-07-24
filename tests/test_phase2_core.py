@@ -1140,7 +1140,11 @@ def test_prospective_eval_maturity_and_hit(cfg):
     assert ev["hit"].iloc[0] == True and ev["hit"].iloc[1] == False  # noqa: E712
     sm = summarize_accuracy(ev, n_days=5)
     assert sm["n_matured"] == 2 and sm["hit_rate"] == 0.5
-    assert "不得下結論" in sm["verdict"]                    # <30 預宣告
+    # v3.28：改為基準率直接對比（兩筆皆實際上漲 → 永遠看多基準=100%）
+    assert sm["base_rate"] == 1.0
+    assert abs(sm["edge"] - (-0.5)) < 1e-9
+    assert "p_binom" not in sm                             # p 值已移除
+    assert "永遠看多" in sm["verdict"]
 
 
 def test_custom_snapshot_build_append_dedup(cfg, ohlcv, tmp_path):

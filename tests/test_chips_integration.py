@@ -247,3 +247,33 @@ def test_cumulative_to_single_quarter_real_2330():
     assert 0.60 < m["gross"] < 0.72, f"毛利率 {m['gross']:.1%} 偏離實況"
     roe = roe_ttm(fin)
     assert 0.20 < roe < 0.50, f"ROE {roe:.1%} 應在合理區間（未修正時 >0.7）"
+
+
+def test_summarize_accuracy_base_rate_comparison():
+    """v3.28 鎖定：實績對比＝命中率 vs 永遠看多基準，無 p 值。
+
+    重現 7/14 集群案例：10 筆同日、9 跌 1 漲、模型多數喊多——
+    基準率 10% 直接暴露「命中 20% 其實優於固定規則」的正確語意，
+    而舊二項檢定對 0.5 會給出誤導的 p。
+    """
+    from src.dashboard.prospective_eval import summarize_accuracy
+    ev = pd.DataFrame({
+        "matured": [True] * 10,
+        "hit": [False, True, False, True] + [False] * 6,
+        "realized_up": [False] * 9 + [True],
+        "stock_id": ["x"] * 10,
+        "last_bar_date": pd.to_datetime(["2026-07-14"] * 10)})
+    r = summarize_accuracy(ev)
+    assert r["hit_rate"] == 0.2 and r["base_rate"] == 0.1
+    assert abs(r["edge"] - 0.1) < 1e-9
+    assert "p_binom" not in r
+    # 模型劣於基準的措辭
+    ev2 = ev.copy()
+    ev2["hit"] = [False] * 10
+    ev2["realized_up"] = [True] * 8 + [False] * 2
+    r2 = summarize_accuracy(ev2)
+    assert r2["edge"] < 0 and "低於" in r2["verdict"]
+    # 空樣本
+    empty = pd.DataFrame(columns=["matured", "hit", "realized_up",
+                                  "stock_id", "last_bar_date"])
+    assert summarize_accuracy(empty)["n_matured"] == 0

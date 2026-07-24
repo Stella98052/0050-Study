@@ -395,42 +395,6 @@ if sid:
             elif sid and not _sid_custom:
                 st.caption(f"{format_choice(sid, names)} 目前僅 {len(hist)} 筆紀錄，"
                            "累積 2 筆以上才顯示趨勢圖。")
-            # ── 📐 預測準確度檢驗（前瞻，v3.21；與 7/30 裁決同一工具）──
-            with st.expander("📐 預測準確度檢驗（前瞻已到期樣本）"):
-                from src.dashboard.prospective_eval import (evaluate_from_frames,
-                                                            summarize_accuracy)
-                _cost = P1.fee_buy_rate + P1.fee_sell_rate + P1.tax_sell_rate
-                _pred_all = load_predictions_view(P3.predictions_csv)
-                _pred_top = _pred_all[_pred_all["stock_id"].isin(holding_ids)]
-                _frames = {s: _view(s, pd.Timestamp.today().strftime("%Y-%m-%d")
-                                    )["ohlcv"] for s in
-                           _pred_top["stock_id"].unique()}
-                _ev = evaluate_from_frames(_pred_top, _frames, _cost,
-                                           P2.forward_return_days)
-                _sm = summarize_accuracy(_ev, P2.forward_return_days)
-                st.markdown(f"**裁決狀態**：{_sm['verdict']}")
-                if _sm["n_matured"] > 0:
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("已到期樣本", _sm["n_matured"])
-                    c2.metric("命中率", f"{_sm['hit_rate']:.1%}")
-                    c3.metric("二項檢定 p", f"{_sm['p_binom']:.3f}")
-                    _mt = _ev[_ev["matured"] == True].copy()   # noqa: E712
-                    _mt["last_bar_date"] = _mt["last_bar_date"].dt.strftime(
-                        "%Y-%m-%d")
-                    _mt["realized_net"] = (_mt["realized_net"] * 100
-                                           ).round(2).astype(str) + "%"
-                    _mt["proba_up"] = (_mt["proba_up"] * 100
-                                       ).round(1).astype(str) + "%"
-                    _mt["stock_id"] = _mt["stock_id"].map(
-                        lambda x: format_choice(x, names))
-                    show_ev = _mt[["stock_id", "last_bar_date", "proba_up",
-                                   "pick", "realized_net", "hit"]]
-                    show_ev.columns = ["代碼", "預測日", "P(漲)", "模型看多",
-                                       "實際淨報酬", "命中"]
-                    st.dataframe(show_ev, hide_index=True)
-                st.caption("命中定義：模型方向（P>50%＝看多）與實際 5 日淨報酬"
-                           "正負一致；淨報酬＝毛報酬−總成本率（一階近似）。"
-                           "凍結預測不重算；此檢驗即 Model v1 最終裁決之工具。")
 
     with _tab_today:
         st.subheader(f"{_label(sid)}｜末根K {view['last_bar_date']}"
@@ -497,23 +461,61 @@ if sid:
             _itp_proba=(pred["proba_up"]
                         if (not is_custom) and pred else None),
             _itp_custom=is_custom)
-        # ── VG 驗證狀態小卡（全模型層級，對每檔股票相同）──
-        st.subheader("驗證關卡狀態（全模型層級，非單股）")
-        st.caption("這六關檢驗的是「整個模型與規則訊號的統計可信度」，"
-                   "十檔以同一模型訓練，故每檔股票顯示相同——這是設計、非錯誤。"
-                   "單股即時判讀請看上方預測卡（方向/機率/波浪/13MV 逐股變動）。"
-                   "注意：此驗證僅涵蓋 0050 前十大模型；自選股不適用模型，"
-                   "本區狀態與自選股無關。")
-        cards = load_vg_status(P3.report_json)
-        cols = st.columns(len(cards))
-        for col, c in zip(cols, cards):
-            icon = "✅" if c["passed"] else ("❌" if c["passed"] is False else "⚠")
-            col.metric(c["gate"], icon)
-            col.caption(c["note"])
-        # 科學結論一句話摘要（讓 ❌ 有脈絡，不被誤讀為「系統壞了」）
-        st.info("科學結論（Phase 2 定案）：VG-3❌＝規則訊號無可證明的優勢；"
-                "VG-6❌＝模型 AUC≈0.5 無判別力。兩者為「誠實的否定結論」，"
-                "系統正確攔下了假訊號，非故障。詳見 PHASE2_CONCLUSION.md。")
+
+        # ── 📐 實績對比（v3.28：直接對比，不用 p 值）──
+        st.subheader("實績對比（前瞻已到期樣本）")
+        from src.dashboard.prospective_eval import (evaluate_from_frames,
+                                                    summarize_accuracy)
+        _cost = P1.fee_buy_rate + P1.fee_sell_rate + P1.tax_sell_rate
+        _pred_all = load_predictions_view(P3.predictions_csv)
+        _pred_top = _pred_all[_pred_all["stock_id"].isin(holding_ids)]
+        _frames = {s_: _view(s_, pd.Timestamp.today().strftime("%Y-%m-%d")
+                             )["ohlcv"] for s_ in
+                   _pred_top["stock_id"].unique()}
+        _ev = evaluate_from_frames(_pred_top, _frames, _cost,
+                                   P2.forward_return_days)
+        _sm = summarize_accuracy(_ev, P2.forward_return_days)
+        st.markdown(f"**判讀**：{_sm['verdict']}")
+        if _sm["n_matured"] > 0:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("已到期樣本", _sm["n_matured"])
+            c2.metric("模型命中率", f"{_sm['hit_rate']:.0%}")
+            c3.metric("永遠看多基準", f"{_sm['base_rate']:.0%}",
+                      delta=f"模型 {_sm['edge']:+.0%}")
+            with st.expander("逐筆明細"):
+                _mt = _ev[_ev["matured"] == True].copy()   # noqa: E712
+                _mt["last_bar_date"] = _mt["last_bar_date"].dt.strftime(
+                    "%Y-%m-%d")
+                _mt["realized_net"] = (_mt["realized_net"] * 100
+                                       ).round(2).astype(str) + "%"
+                _mt["proba_up"] = (_mt["proba_up"] * 100
+                                   ).round(1).astype(str) + "%"
+                _mt["stock_id"] = _mt["stock_id"].map(
+                    lambda x: format_choice(x, names))
+                show_ev = _mt[["stock_id", "last_bar_date", "proba_up",
+                               "pick", "realized_net", "hit"]]
+                show_ev.columns = ["代碼", "預測日", "P(漲)", "模型看多",
+                                   "實際淨報酬", "命中"]
+                st.dataframe(show_ev, hide_index=True)
+        st.caption("命中＝模型方向與實際 5 日淨報酬正負一致（淨報酬已扣"
+                   "成本 0.5925%）。「永遠看多基準」＝樣本中實際上漲的"
+                   "比率；模型須穩定高於它才算有資訊。凍結預測不重算。")
+
+        # ── 研究定位一行（v3.28：VG 詳情收進 expander，日常不佔版面）──
+        st.caption("研究定位：Phase 2 已定案——模型與 39 項技術/估值/成長/"
+                   "產業特徵皆無可重現預測力（誠實否定結論）。模型數字僅供"
+                   "前瞻協定累積；日常判讀依上方解讀結論與實績對比。")
+        with st.expander("驗證關卡詳情（研究紀錄，非日常操作資訊）"):
+            cards = load_vg_status(P3.report_json)
+            cols = st.columns(len(cards))
+            for col, c in zip(cols, cards):
+                icon = ("✅" if c["passed"]
+                        else ("❌" if c["passed"] is False else "⚠"))
+                col.metric(c["gate"], icon)
+                col.caption(c["note"])
+            st.info("VG-3❌＝規則訊號無可證明的優勢；VG-6❌＝模型 AUC≈0.5 "
+                    "無判別力。兩者為誠實的否定結論、系統正確攔下假訊號，"
+                    "非故障。詳見 PHASE2_CONCLUSION.md。")
 
         # ── 前瞻協定進度（Model v2 最終閘）──
         st.subheader("前瞻驗證進度（Model v2 最終閘）")

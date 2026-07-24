@@ -46,33 +46,40 @@ def evaluate_from_frames(pred_df: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
-def summarize_accuracy(ev: pd.DataFrame, n_days: int) -> dict:
-    """到期樣本彙總：命中率、二項檢定 p、獨立樣本數、預宣告裁決文字。"""
-    from scipy.stats import binomtest
-    from src.signal_events import select_independent_dates
+def summarize_accuracy(ev: pd.DataFrame, n_days: int = 5) -> dict:
+    """實績對比（v3.28 簡化）——不用推論統計，直接比對兩個命中率。
+
+    設計理由（使用者指正，2026/7/24）：原以二項檢定對 0.5 求 p 值有二誤：
+    ①「淨報酬為正」的自然發生率不是 50%（多頭期間可達 60%），故永遠
+    喊多的零技能模型會被判顯著；②同日多檔預測高度相關，獨立性前提
+    不成立。正解是直接呈現可驗證的事實：
+
+        模型命中率  vs  永遠喊「看多」的命中率（＝實際上漲比率）
+
+    模型若低於或等於後者，代表它不如一條固定規則——一眼可辨，
+    不需要 p 值。
+    """
     m = ev[ev["matured"] == True]                          # noqa: E712
     n = int(len(m))
     if n == 0:
-        return {"n_matured": 0, "n_independent": 0, "hit_rate": None,
-                "p_binom": None,
+        return {"n_matured": 0, "hit_rate": None, "base_rate": None,
+                "edge": None, "n_up": 0,
                 "verdict": "尚無已到期樣本（每筆需等 5 個交易日後才可評）。"}
     hits = int(m["hit"].sum())
-    hr = hits / n
-    p = binomtest(hits, n, 0.5).pvalue
-    n_ind = 0
-    for _sid, g in m.groupby("stock_id"):
-        n_ind += len(select_independent_dates(
-            sorted(pd.to_datetime(g["last_bar_date"])), n_days))
-    if n_ind < 30:
-        verdict = (f"累積中（獨立 {n_ind}/30）——依預先宣告規則，"
-                   f"達 30 前不得下結論；下方數字僅供追蹤。")
+    n_up = int(m["realized_up"].sum())
+    hit_rate = hits / n
+    base_rate = n_up / n                       # 永遠看多的命中率
+    edge = hit_rate - base_rate
+    if edge > 0.05:
+        verdict = (f"模型命中 {hit_rate:.0%}，高於「永遠看多」基準 "
+                   f"{base_rate:.0%}（+{edge:.0%}）——樣本 {n} 筆，"
+                   f"持續累積觀察是否維持。")
+    elif edge < -0.05:
+        verdict = (f"模型命中 {hit_rate:.0%}，**低於**「永遠看多」基準 "
+                   f"{base_rate:.0%}（{edge:.0%}）——即模型不如一條固定規則，"
+                   f"與 VG-6 判定的無判別力一致。")
     else:
-        sig = p < 0.05
-        verdict = (f"獨立樣本已達 {n_ind}（≥30）：命中率 {hr:.1%}、"
-                   f"二項檢定 p={p:.3f} → "
-                   + ("顯著異於 50%（罕見結果，須複核後才可宣告）"
-                      if sig else
-                      "與 50% 無顯著差異——前瞻確認模型無判別力，與 "
-                      "holdout AUC≈0.494 一致，Model v1 依預宣告規則歸檔。"))
-    return {"n_matured": n, "n_independent": int(n_ind),
-            "hit_rate": hr, "p_binom": float(p), "verdict": verdict}
+        verdict = (f"模型命中 {hit_rate:.0%}，與「永遠看多」基準 "
+                   f"{base_rate:.0%} 相當——無可辨識的優勢。")
+    return {"n_matured": n, "hit_rate": hit_rate, "base_rate": base_rate,
+            "edge": edge, "n_up": n_up, "verdict": verdict}
